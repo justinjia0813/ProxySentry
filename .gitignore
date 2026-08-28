@@ -1,0 +1,20 @@
+# macOS / Xcode
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Swift package and local tooling
+.swiftpm/
+.build/
+
+# Local release artifacts
+dist/
+
+# Local secrets and environment files
+.env
+.env.*
+*.secret
+*.credentials

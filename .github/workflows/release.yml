@@ -1,0 +1,40 @@
+name: Release unsigned preview
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Run tests
+        run: >-
+          xcodebuild test
+          -project ProxySentry.xcodeproj
+          -scheme ProxySentry
+          -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+
+      - name: Build unsigned universal package
+        run: ./scripts/package-release.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          zip="dist/ProxySentry-v${version}-macOS-universal-unsigned.zip"
+          sha="${zip}.sha256"
+          gh release create "$GITHUB_REF_NAME" "$zip" "$sha" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ProxySentry $GITHUB_REF_NAME (unsigned preview)" \
+            --notes "Unsigned macOS preview build. See README for installation and Gatekeeper instructions."
