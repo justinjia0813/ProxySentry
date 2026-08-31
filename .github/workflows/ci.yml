@@ -25,4 +25,4 @@ jobs:
           CODE_SIGNING_REQUIRED=NO
 
       - name: Build unsigned universal package
-        run: ./scripts/package-release.sh 0.1.0
+        run: ./scripts/package-release.sh

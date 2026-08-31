@@ -1,89 +1,100 @@
 # ProxySentry
 
-ProxySentry 是一个 macOS 网络诊断工具，用分层证据区分基础网络、系统代理、Clash 内核和当前节点的问题。当前本地源码已实现 2.0：状态面板收纳到刘海区域，并以终端风格胶囊按需展开。它只做只读检测，不修改 Clash 配置，也不切换节点。
+一眼判断“网络不好”到底坏在哪一层。
 
-2.0 尚未发布。本 README 描述的是当前本地实现，不代表已有 2.0 下载包或远程发布结果；公开下载仍是 v0.1.0 菜单栏版本。
+ProxySentry 是一款轻量、只读的 macOS 网络诊断工具。它把基础网络、代理流量、当前节点和 Clash 内核拆成四层证据，并把结果收纳在刘海或屏幕顶部；不切换节点，不修改代理配置。
 
-> 当前是未签名预览版（unsigned preview）。它适合试用、反馈和协作开发，不是 Clash Verge Rev 官方产品。
+[下载 2.0 未签名预览版](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.0.0) · [查看全部版本](https://github.com/justinjia0813/ProxySentry/releases) · [报告问题](https://github.com/justinjia0813/ProxySentry/issues)
 
-## 已发布版本（v0.1.0）
+![ProxySentry 2.0 终端风格诊断面板](docs/assets/proxysentry-2.0.png)
 
-公开的 v0.1.0 常驻菜单栏，点击状态图标打开诊断面板；2.0 本地源码已改为刘海浮窗。两者都使用四行诊断矩阵：
+> [!IMPORTANT]
+> GitHub 上提供的是 2.0.0 未签名预览包。它没有 Developer ID（Developer Identifier，开发者标识；Apple 用来识别独立开发者签名身份）签名，也没有通过 Apple 公证，macOS Gatekeeper 会拦截它。现阶段适合开发测试，不是面向普通用户的免提示安装包。
 
-面板中的四项指标含义如下：
+## 2.0 有什么不同
 
-| 指标 | 含义 |
-| --- | --- |
-| `base` | 基础网络：网卡、默认网关、直连公网地址和直连网站的综合证据。 |
-| `traffic` | 代理流量：是否观察到 Clash 正在承载非直连连接；`WAIT` 表示暂时没有证据，不等于失败。 |
-| `proxy` | 当前代理节点：通过本机代理对固定目标进行连通性和延迟检测。 |
-| `clash` | Clash 内核：只读检查本机 Clash Verge Rev 的 Mihomo socket、版本、配置和连接汇总。 |
+- 不占用菜单栏或 Dock；有刘海时收进刘海区域，无刘海显示器退化为顶部居中胶囊。
+- 鼠标移入时展开，离开、外部点击或按 Escape 后收起。
+- 网络变化只在后台复检，不因短暂波动打断用户；异常连续至少 3 分钟才主动提示一次，恢复后才允许再次提醒。
+- 使用终端风格的高对比界面，同时适配深色、浅色、多屏、全屏 Space、长文本和 VoiceOver。
+- 只使用公开 AppKit 接口，不申请辅助功能权限，不使用 macOS 私有窗口接口。
 
-## 2.0 本地实现（未发布）
+## 下载与安装
 
-- 不显示菜单栏或 Dock 图标；状态收纳在刘海区域，悬停时展开终端风格胶囊。
-- 网络或系统代理变化只触发后台复检，不自动展开；黄、红或灰状态连续至少 3 分钟时短暂展开一次，恢复正常后才允许下一次提醒。
-- 鼠标离开、外部点击或 Escape 后收起；收起不停止诊断。
-- 有刘海的屏幕使用刘海左右可用区域；无刘海外接屏或普通屏幕退化为顶部胶囊。
-- 适配多屏、全屏 Space、浅色/深色模式、长文本、VoiceOver 和低占用后台运行。
-- 只使用公开 AppKit API（Application Programming Interface，应用程序编程接口；系统允许应用调用的接口），不使用 SkyLight、Core Graphics Services（CGS，核心图形服务；macOS 私有窗口管理接口）或其他私有 API，也不申请辅助功能权限。
+下载当前预览版：
 
-## 支持范围
+1. 打开 [ProxySentry 2.0.0 Preview](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.0.0)。
+2. 在 **Assets** 中下载 macOS 通用构建，而不是 GitHub 自动生成的源码压缩包。
+3. 解压，将 `ProxySentry.app` 拖入“应用程序”，然后打开。
+
+当前公开包的文件名带有 `-unsigned`，代表它是未签名预览版。若要试用，请右键应用并选择“打开”；必要时前往“系统设置 → 隐私与安全性”确认。详见 [Apple 的安全设置说明](https://support.apple.com/guide/mac-help/mh40616/mac)。不要通过关闭 Gatekeeper 或运行来源不明的解除隔离命令来安装。
+
+签名且公证通过的正式版发布后，下载入口会切换到 GitHub 的 Latest Release。
+
+## 四层诊断
+
+| 检查项 | 回答的问题 | `WAIT` 代表什么 |
+| --- | --- | --- |
+| `base` | 网卡、默认网关和直连公网是否正常？ | 证据仍不足或检测尚未完成。 |
+| `traffic` | 是否观察到 Clash 正在承载非直连连接？ | 暂时没有观察到代理流量，不等于失败。 |
+| `proxy` | 当前代理节点能否连通，延迟如何？ | 暂时无法形成可靠结论。 |
+| `clash` | Clash Verge Rev 的 Mihomo 内核和本地接口是否可用？ | 内核状态尚未确认。 |
+
+状态颜色保持一致：绿色正常，橙色需要关注，红色故障，灰色未知。面板同时保留异常摘要，避免只有颜色没有原因。
+
+## 隐私与权限
+
+ProxySentry 只做诊断：
+
+- 不切换节点，不修改 Clash 配置，不接管系统代理。
+- 只读访问 Clash Verge Rev 的本地 Unix socket，并只读取白名单接口的聚合结果。
+- 不上传或持久化原始连接、节点名称、订阅地址、访问密钥或原始响应。
+- 仅在运行期间周期性探测 Apple 中国站、百度、Google、Cloudflare，以及 `1.1.1.1:443` 和 `223.5.5.5:443`。Domain Name System（DNS，域名系统；把域名解析为网络地址）或目标站点策略可能影响检测结果。
+
+ProxySentry 不是 Clash Verge Rev 官方产品，与 Clash Verge Rev、Mihomo、Apple、百度、Google、Cloudflare 或阿里云均无官方关联或背书。
+
+## 系统要求
 
 - macOS 13 或更高版本。
-- Apple 芯片和 Intel 芯片（通用二进制）。
-- Clash Verge Rev；其他 Clash 客户端和自定义 socket 路径暂未承诺兼容。
-
-ProxySentry 与 Clash Verge Rev、Mihomo、Apple、百度、Google、Cloudflare 或阿里云均无官方关联、背书或合作关系。
-
-## 获取本地构建
-
-当前没有授权的 2.0 发布包。若需要试用当前本地源码，请自行构建；签名、公证和公开发布仍未授权。
-
-本地构建产物为未签名预览版，首次打开可能被 macOS 拦截：右键应用选择“打开”，然后在“系统设置 → 隐私与安全性”中选择“仍要打开”。也可参考 [Apple 官方的未签名应用打开说明](https://support.apple.com/guide/mac-help/mh40616/mac)。
-
-## 隐私说明
-
-每轮诊断会发起少量只读网络探测：
-
-- Apple 中国站 `www.apple.com.cn`、百度 `www.baidu.com`；
-- Google `www.gstatic.com`、Cloudflare `cp.cloudflare.com`；
-- Cloudflare 公网地址 `1.1.1.1:443` 和阿里云公共 Domain Name System（DNS，域名系统）地址 `223.5.5.5:443`。
-
-应用只读访问本机 Clash Verge Rev 的固定 Unix socket，并读取白名单接口的聚合结果。它不会切换节点、修改配置或写入 Clash；不会上传或持久化原始连接、节点名称、订阅 Uniform Resource Locator（URL，统一资源定位符，即网络资源地址）、secret（访问密钥）或原始响应。检测结果只用于当前面板和本地诊断摘要。
-
-应用运行期间会周期性检查网络；当前本地实现约每 60 秒一轮，用户也可以手动重查。网络变化会立即触发后台复检但不展开；黄、红或灰状态连续至少 3 分钟时，面板短暂展开一次。DNS 会把域名解析为网络地址。
-
-网络探测可能被本地网络、DNS、代理规则或目标站点策略阻断；失败结果应结合面板中的其他证据理解。
-
-## 已知限制
-
-- 仅支持 macOS；没有 Windows 或 Linux 版本。
-- 需要 Clash Verge Rev 正在运行且其本地 socket 位于应用支持的固定路径。
-- 未签名应用会触发 macOS 安全提示；当前没有自动更新器。2.0 尚未发布，也没有签名、公证或公开发布承诺。
-- 网络检测是瞬时采样，不保证代表所有应用或所有网站的实际体验。
+- Apple 芯片与 Intel 芯片；发布包为 `arm64` 和 `x86_64` 通用构建。
+- 当前明确支持 Clash Verge Rev；其他 Clash 客户端和自定义 socket 路径尚未承诺兼容。
 
 ## 从源码构建
 
-需要安装 Xcode 和 macOS 开发工具：
+需要 Xcode 和 macOS 开发工具：
 
 ```sh
 xcodebuild -project ProxySentry.xcodeproj -scheme ProxySentry -configuration Debug \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 ```
 
-生成未签名通用本地 Release 包（不代表已发布）：
+生成与项目版本一致的未签名本地预览包：
 
 ```sh
-./scripts/package-release.sh 2.0.0
+./scripts/package-release.sh
 ```
 
-脚本会检查生成应用的 arm64、x86_64 架构以及 macOS 13.0 最低版本，并在 `dist/` 生成 ZIP 与 Secure Hash Algorithm 256-bit（SHA-256，256 位安全散列算法；用于核对文件是否被改动）文件。
+脚本会检查通用架构、macOS 13.0 最低版本，并在 `dist/` 生成压缩包和 Secure Hash Algorithm 256-bit（SHA-256，256 位安全散列算法；用于核对下载文件是否被改动）校验文件。本地构建不等于 Developer ID 签名或 Apple 公证。
+
+## 发布可信度
+
+截至 2026-08-31：
+
+| 项目 | 状态 |
+| --- | --- |
+| 2.0 源码与通用构建 | 已完成 |
+| GitHub Release 下载入口 | `preview-v2.0.0` 未签名预览版 |
+| Developer ID 签名 | 未完成；本机没有可用签名身份 |
+| Apple 公证与票据装订 | 未完成 |
+| Gatekeeper 验证 | 当前公开包会被拒绝 |
+| 自动更新 | 暂无 |
+
+只有在最终上传的同一份应用完成 Developer ID 签名、Apple 公证、票据装订，并通过签名与 Gatekeeper 检查后，才会标记为正式发布。详细证据和发布门槛见 [发布合规审计](docs/release-distribution-audit.md)。
 
 ## 参与贡献
 
-欢迎提交 Issue 和 Pull Request：先描述可复现的问题或改进目标，再提交尽量小的改动。提交前请运行相关测试和 `git diff --check`。不要把 Clash secret、订阅 URL、原始连接日志或个人信息提交到仓库；详见 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [SECURITY.md](SECURITY.md)。
+欢迎提交 [Issue](https://github.com/justinjia0813/ProxySentry/issues) 和 Pull Request。提交前请运行相关测试和 `git diff --check`；不要提交 Clash 访问密钥、订阅地址、原始连接日志或个人信息。更多约定见 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [SECURITY.md](SECURITY.md)。
 
 ## 许可证
 
-本项目使用 [Massachusetts Institute of Technology License（MIT License，麻省理工学院许可证，一种允许使用、修改和再分发的宽松开源许可证）](LICENSE)。
+项目采用 [Massachusetts Institute of Technology License（MIT License，麻省理工学院许可证；允许使用、修改和再分发的宽松开源许可证）](LICENSE)。
