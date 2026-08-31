@@ -10,6 +10,19 @@ final class VisualSnapshotTests: XCTestCase {
         try render(.dark, expanded: true, to: "/tmp/ProxySentry-popover-dark.png")
     }
 
+    func testRouteLabelsRemainVisibleInLightAppearance() throws {
+        let path = "/tmp/ProxySentry-popover-light-route-labels.png"
+        let size = NSSize(width: 360, height: 460)
+        try render(.light, expanded: true, size: size, to: path)
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let bitmap = NSBitmapImageRep(data: data) else {
+            return XCTFail("Could not read rendered PNG")
+        }
+        let labelRegion = NSRect(x: 10, y: 195, width: 65, height: 65)
+        XCTAssertGreaterThan(brightPixelCount(in: bitmap, viewSize: size, rect: labelRegion), 100)
+    }
+
     func testRenderCollapsedPopover() throws {
         try render(.dark, expanded: false, size: NSSize(width: 185, height: 28), to: "/tmp/ProxySentry-popover-collapsed.png")
     }
@@ -114,5 +127,22 @@ final class VisualSnapshotTests: XCTestCase {
         try png.write(to: URL(fileURLWithPath: path), options: .atomic)
         XCTAssertGreaterThan(png.count, minimumBytes)
         XCTAssertLessThan(png.count, 500_000)
+    }
+
+    private func brightPixelCount(in bitmap: NSBitmapImageRep, viewSize: NSSize, rect: NSRect) -> Int {
+        let scaleX = CGFloat(bitmap.pixelsWide) / viewSize.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / viewSize.height
+        let xRange = Int(rect.minX * scaleX)..<Int(rect.maxX * scaleX)
+        let yRange = Int(rect.minY * scaleY)..<Int(rect.maxY * scaleY)
+
+        return xRange.reduce(into: 0) { count, x in
+            for y in yRange {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let luminance = 0.2126 * color.redComponent
+                    + 0.7152 * color.greenComponent
+                    + 0.0722 * color.blueComponent
+                if luminance > 0.45 { count += 1 }
+            }
+        }
     }
 }

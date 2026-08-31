@@ -240,6 +240,7 @@ struct StatusPopoverView: View {
             ForEach(routeRows) { row in
                 HStack(spacing: 7) {
                     Text(row.name)
+                        .foregroundStyle(terminalText)
                         .frame(width: 62, alignment: .leading)
                     HStack(spacing: 5) {
                         Text(row.symbol)
