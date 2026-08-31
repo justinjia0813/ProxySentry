@@ -6,17 +6,30 @@ import XCTest
 @MainActor
 final class VisualSnapshotTests: XCTestCase {
     func testRenderLightAndDarkPopovers() throws {
-        try render(.light, to: "/tmp/ProxySentry-popover-light.png")
-        try render(.dark, to: "/tmp/ProxySentry-popover-dark.png")
+        try render(.light, expanded: true, to: "/tmp/ProxySentry-popover-light.png")
+        try render(.dark, expanded: true, to: "/tmp/ProxySentry-popover-dark.png")
     }
 
-    func testRenderLightAndDarkStatusItemLogos() throws {
-        try renderLogos(.light, to: "/tmp/ProxySentry-logos-light.png")
-        try renderLogos(.dark, to: "/tmp/ProxySentry-logos-dark.png")
+    func testRenderCollapsedPopover() throws {
+        try render(.dark, expanded: false, size: NSSize(width: 185, height: 28), to: "/tmp/ProxySentry-popover-collapsed.png")
+    }
+
+    func testRenderEveryCollapsedState() throws {
+        for (index, state) in [DiagnosisState.green, .blue, .yellow, .red, .gray].enumerated() {
+            let model = sampleModel()
+            model.state = state
+            try writePNG(
+                popover(model, scheme: .dark),
+                size: NSSize(width: 185, height: 28),
+                to: "/tmp/ProxySentry-collapsed-state-\(index).png",
+                minimumBytes: 300
+            )
+        }
     }
 
     func testRenderOverflowFailurePopover() throws {
         let model = sampleModel()
+        model.isExpanded = true
         model.state = .gray
         model.evidence = [
             ProbeEvidence(category: .direct, outcome: .failure, milliseconds: 0, userVisibleDescription: "域名解析失败"),
@@ -28,25 +41,32 @@ final class VisualSnapshotTests: XCTestCase {
         ]
         try writePNG(
             popover(model, scheme: .dark),
-            size: NSSize(width: 320, height: 408),
+            size: NSSize(width: 360, height: 460),
             to: "/tmp/ProxySentry-popover-overflow.png",
-            minimumBytes: 10_000
+            minimumBytes: 4_000
         )
     }
 
-    private func render(_ scheme: ColorScheme, to path: String) throws {
+    private func render(
+        _ scheme: ColorScheme,
+        expanded: Bool,
+        size: NSSize = NSSize(width: 360, height: 460),
+        to path: String
+    ) throws {
+        let model = sampleModel()
+        model.isExpanded = expanded
         try writePNG(
-            popover(sampleModel(), scheme: scheme),
-            size: NSSize(width: 320, height: 408),
+            popover(model, scheme: scheme),
+            size: size,
             to: path,
-            minimumBytes: 10_000
+            minimumBytes: expanded ? 4_000 : 500
         )
     }
 
     private func sampleModel() -> ProxySentryViewModel {
         let model = ProxySentryViewModel()
         model.state = .yellow
-        model.lastCheckedAt = Date()
+        model.lastCheckedAt = Date(timeIntervalSince1970: 1_700_000_000)
         model.clashSummary = "1.19.8 · 模式：rule · 当前：自动选择 · 42 ms"
         model.loginAtLaunch = true
         model.loginAvailable = false
@@ -68,34 +88,11 @@ final class VisualSnapshotTests: XCTestCase {
             StatusPopoverView(
                 model: model,
                 onRecheck: {}, onOpenClash: {}, onCopySummary: {},
-                onLoginChanged: { _ in }, onOpenLoginSettings: {}, onQuit: {}
+                onLoginChanged: { _ in }, onOpenLoginSettings: {},
+                onPresentationChanged: { model.isExpanded = $0 }, onQuit: {}
             )
         }
         .environment(\.colorScheme, scheme)
-    }
-
-    private func renderLogos(_ scheme: ColorScheme, to path: String) throws {
-        let entries: [(String, DiagnosisState.Kind)] = [
-            ("代理", .green), ("直连", .blue), ("本机", .yellow),
-            ("上游", .red), ("未知", .gray),
-        ]
-        let view = HStack(spacing: 18) {
-            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-                VStack(spacing: 6) {
-                    Image(nsImage: StatusItemLogo.image(for: entry.1))
-                        .frame(width: 16, height: 16)
-                    Text(entry.0)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(14)
-        .frame(width: 260, height: 64)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .environment(\.colorScheme, scheme)
-
-        try writePNG(view, size: NSSize(width: 260, height: 64), to: path, minimumBytes: 1_000)
     }
 
     private func writePNG<V: View>(
@@ -116,5 +113,6 @@ final class VisualSnapshotTests: XCTestCase {
         }
         try png.write(to: URL(fileURLWithPath: path), options: .atomic)
         XCTAssertGreaterThan(png.count, minimumBytes)
+        XCTAssertLessThan(png.count, 500_000)
     }
 }

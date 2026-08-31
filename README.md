@@ -1,10 +1,14 @@
 # ProxySentry
 
-ProxySentry 是一个 macOS 菜单栏诊断工具，用分层证据区分基础网络、系统代理、Clash 内核和当前节点的问题。它只做只读检测，不修改 Clash 配置，也不切换节点。
+ProxySentry 是一个 macOS 网络诊断工具，用分层证据区分基础网络、系统代理、Clash 内核和当前节点的问题。当前本地源码已实现 2.0：状态面板收纳到刘海区域，并以终端风格胶囊按需展开。它只做只读检测，不修改 Clash 配置，也不切换节点。
+
+2.0 尚未发布。本 README 描述的是当前本地实现，不代表已有 2.0 下载包或远程发布结果；公开下载仍是 v0.1.0 菜单栏版本。
 
 > 当前是未签名预览版（unsigned preview）。它适合试用、反馈和协作开发，不是 Clash Verge Rev 官方产品。
 
-## 功能
+## 已发布版本（v0.1.0）
+
+公开的 v0.1.0 常驻菜单栏，点击状态图标打开诊断面板；2.0 本地源码已改为刘海浮窗。两者都使用四行诊断矩阵：
 
 面板中的四项指标含义如下：
 
@@ -15,6 +19,15 @@ ProxySentry 是一个 macOS 菜单栏诊断工具，用分层证据区分基础�
 | `proxy` | 当前代理节点：通过本机代理对固定目标进行连通性和延迟检测。 |
 | `clash` | Clash 内核：只读检查本机 Clash Verge Rev 的 Mihomo socket、版本、配置和连接汇总。 |
 
+## 2.0 本地实现（未发布）
+
+- 不显示菜单栏或 Dock 图标；状态收纳在刘海区域，悬停时展开终端风格胶囊。
+- 网络或系统代理变化时短暂展开并立即复检；稳定状态下每 60 秒后台检查只更新状态，不主动打扰。
+- 鼠标离开、外部点击或 Escape 后收起；收起不停止诊断。
+- 有刘海的屏幕使用刘海左右可用区域；无刘海外接屏或普通屏幕退化为顶部胶囊。
+- 适配多屏、全屏 Space、浅色/深色模式、长文本、VoiceOver 和低占用后台运行。
+- 只使用公开 AppKit API（Application Programming Interface，应用程序编程接口；系统允许应用调用的接口），不使用 SkyLight、Core Graphics Services（CGS，核心图形服务；macOS 私有窗口管理接口）或其他私有 API，也不申请辅助功能权限。
+
 ## 支持范围
 
 - macOS 13 或更高版本。
@@ -23,11 +36,11 @@ ProxySentry 是一个 macOS 菜单栏诊断工具，用分层证据区分基础�
 
 ProxySentry 与 Clash Verge Rev、Mihomo、Apple、百度、Google、Cloudflare 或阿里云均无官方关联、背书或合作关系。
 
-## 下载与安装
+## 获取本地构建
 
-从 [Releases](https://github.com/justinjia0813/ProxySentry/releases) 下载带有 `macOS-universal-unsigned` 的 ZIP，解压后将 `ProxySentry.app` 移到“应用程序”文件夹。
+当前没有授权的 2.0 发布包。若需要试用当前本地源码，请自行构建；签名、公证和公开发布仍未授权。
 
-这是未签名预览版，首次打开可能被 macOS 拦截：右键应用选择“打开”，然后在“系统设置 → 隐私与安全性”中选择“仍要打开”。也可参考 [Apple 官方的未签名应用打开说明](https://support.apple.com/guide/mac-help/mh40616/mac)。只从你信任的 Release 下载，发布页同时提供 Secure Hash Algorithm 256-bit（SHA-256，256 位安全散列算法）校验文件。
+本地构建产物为未签名预览版，首次打开可能被 macOS 拦截：右键应用选择“打开”，然后在“系统设置 → 隐私与安全性”中选择“仍要打开”。也可参考 [Apple 官方的未签名应用打开说明](https://support.apple.com/guide/mac-help/mh40616/mac)。
 
 ## 隐私说明
 
@@ -39,7 +52,7 @@ ProxySentry 与 Clash Verge Rev、Mihomo、Apple、百度、Google、Cloudflare 
 
 应用只读访问本机 Clash Verge Rev 的固定 Unix socket，并读取白名单接口的聚合结果。它不会切换节点、修改配置或写入 Clash；不会上传或持久化原始连接、节点名称、订阅 Uniform Resource Locator（URL，统一资源定位符，即网络资源地址）、secret（访问密钥）或原始响应。检测结果只用于当前面板和本地诊断摘要。
 
-应用运行期间会周期性检查网络；稳定状态下约每 60 秒一轮，用户也可以手动重查。DNS 会把域名解析为网络地址。
+应用运行期间会周期性检查网络；当前本地实现稳定状态下约每 60 秒一轮，用户也可以手动重查。2.0 目标中的网络变化展开是短暂提示，不改变该周期。DNS 会把域名解析为网络地址。
 
 网络探测可能被本地网络、DNS、代理规则或目标站点策略阻断；失败结果应结合面板中的其他证据理解。
 
@@ -47,7 +60,7 @@ ProxySentry 与 Clash Verge Rev、Mihomo、Apple、百度、Google、Cloudflare 
 
 - 仅支持 macOS；没有 Windows 或 Linux 版本。
 - 需要 Clash Verge Rev 正在运行且其本地 socket 位于应用支持的固定路径。
-- 未签名应用会触发 macOS 安全提示；当前没有自动更新器。
+- 未签名应用会触发 macOS 安全提示；当前没有自动更新器。2.0 尚未发布，也没有签名、公证或公开发布承诺。
 - 网络检测是瞬时采样，不保证代表所有应用或所有网站的实际体验。
 
 ## 从源码构建
@@ -59,13 +72,13 @@ xcodebuild -project ProxySentry.xcodeproj -scheme ProxySentry -configuration Deb
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 ```
 
-生成未签名通用 Release 包：
+生成未签名通用本地 Release 包（不代表已发布）：
 
 ```sh
-./scripts/package-release.sh 0.1.0
+./scripts/package-release.sh 2.0.0
 ```
 
-脚本会检查生成应用的 arm64、x86_64 架构以及 macOS 13.0 最低版本，并在 `dist/` 生成 ZIP 与 SHA-256 文件。
+脚本会检查生成应用的 arm64、x86_64 架构以及 macOS 13.0 最低版本，并在 `dist/` 生成 ZIP 与 Secure Hash Algorithm 256-bit（SHA-256，256 位安全散列算法；用于核对文件是否被改动）文件。
 
 ## 参与贡献
 

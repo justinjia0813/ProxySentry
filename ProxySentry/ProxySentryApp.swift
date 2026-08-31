@@ -30,8 +30,7 @@ private final class TriggerRelay: @unchecked Sendable {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = ProxySentryViewModel()
-    private var statusItem: NSStatusItem!
-    private var popover: NSPopover!
+    private var panelController: NotchPanelController?
     private var controller: DiagnosticsController?
     private var pathObserver: PathObserver?
     private var proxyObserver: ProxyObserver?
@@ -41,8 +40,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard NSClassFromString("XCTestCase") == nil else { return }
 
         let relay = TriggerRelay()
-        let pathObserver = PathObserver { relay.trigger() }
-        let proxyObserver = ProxyObserver { relay.trigger() }
+        let pathObserver = PathObserver { [weak self] in
+            relay.trigger()
+            Task { @MainActor in self?.panelController?.revealForNetworkChange() }
+        }
+        let proxyObserver = ProxyObserver { [weak self] in
+            relay.trigger()
+            Task { @MainActor in self?.panelController?.revealForNetworkChange() }
+        }
 
         let controller = DiagnosticsController(
             sleep: { try await Task.sleep(for: $0) },
@@ -83,8 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.proxyObserver = proxyObserver
         relay.attach(controller)
 
-        configurePopover()
-        configureStatusItem()
+        configurePanel()
         configureLoginItem()
 
         controller.start()
@@ -106,44 +110,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pathObserver?.stop()
         proxyObserver?.stop()
         controller?.stop()
+        panelController?.stop()
     }
 
     func applicationDidResignActive(_ notification: Notification) {
-        popover?.performClose(nil)
+        panelController?.collapse()
     }
 
-    private func configurePopover() {
-        popover = NSPopover()
-        popover.contentSize = NSSize(width: 320, height: 408)
-        popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: StatusPopoverView(
+    private func configurePanel() {
+        let content = NSHostingController(rootView: StatusPopoverView(
             model: model,
             onRecheck: { [weak self] in self?.controller?.trigger() },
             onOpenClash: { [weak self] in self?.openClash() },
             onCopySummary: { [weak self] in self?.copySummary() },
             onLoginChanged: { [weak self] in self?.setLoginAtLaunch($0) },
             onOpenLoginSettings: { SMAppService.openSystemSettingsLoginItems() },
+            onPresentationChanged: { [weak self] in self?.panelController?.setExpanded($0) },
             onQuit: { NSApplication.shared.terminate(nil) }
         ))
-    }
-
-    private func configureStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            button.action = #selector(togglePopover(_:))
-            button.target = self
-        }
-        updateStatusItem()
-    }
-
-    @objc private func togglePopover(_ sender: Any?) {
-        guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(sender)
-        } else {
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        }
+        let panelController = NotchPanelController(model: model, contentViewController: content)
+        self.panelController = panelController
+        panelController.start()
     }
 
     private func refreshFromController() {
@@ -153,17 +140,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.lastCheckedAt = controller.lastCheckedAt
         model.evidence = controller.evidence
         model.clashSummary = Self.clashText(controller.clashSummary)
-        updateStatusItem()
-    }
-
-    private func updateStatusItem() {
-        guard let button = statusItem?.button else { return }
-        let state = model.state
-        button.image = StatusItemLogo.image(for: state.kind)
-        button.contentTintColor = nil
-        button.toolTip = state.title
-        button.setAccessibilityLabel("ProxySentry：\(state.title)")
-        button.setAccessibilityValue(model.isChecking ? "正在检测" : "检测完成")
     }
 
     private func postNotification(previous: DiagnosisState?, current: DiagnosisState) {
@@ -421,74 +397,311 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 }
 
-enum StatusItemLogo {
-    static func image(for kind: DiagnosisState.Kind) -> NSImage {
-        let color = color(for: kind)
-        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
-            color.setStroke()
-            color.setFill()
+/// Pure screen geometry so notch placement can be tested without a window server.
+enum NotchPanelLayout {
+    static let collapsedNotchSize = NSSize(width: 185, height: 48)
+    static let collapsedScreenSize = NSSize(width: 185, height: 28)
+    static let expandedSize = NSSize(width: 360, height: 460)
 
-            let routes = NSBezierPath()
-            routes.lineWidth = 1.35
-            routes.lineCapStyle = .round
-            routes.lineJoinStyle = .round
-            routes.move(to: NSPoint(x: 1.5, y: 12))
-            routes.line(to: NSPoint(x: 5.5, y: 12))
-            routes.line(to: NSPoint(x: 9.6, y: 8))
-            routes.move(to: NSPoint(x: 1.5, y: 8))
-            routes.line(to: NSPoint(x: 9.6, y: 8))
-            routes.move(to: NSPoint(x: 1.5, y: 4))
-            routes.line(to: NSPoint(x: 5.5, y: 4))
-            routes.line(to: NSPoint(x: 9.6, y: 8))
-            routes.stroke()
-
-            drawEndpoint(kind, center: NSPoint(x: 13, y: 8))
-            return true
-        }
-        image.isTemplate = false
-        return image
+    static func preferredScreenIndex(
+        in screens: [(containsMouse: Bool, isBuiltInNotch: Bool)]
+    ) -> Int? {
+        screens.firstIndex { $0.isBuiltInNotch }
+            ?? screens.firstIndex { $0.containsMouse }
+            ?? screens.indices.first
     }
 
-    private static func drawEndpoint(_ kind: DiagnosisState.Kind, center: NSPoint) {
-        switch kind {
-        case .green:
-            NSBezierPath(ovalIn: NSRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4)).fill()
-        case .blue:
-            let ring = NSBezierPath(ovalIn: NSRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4))
-            ring.lineWidth = 1.35
-            ring.stroke()
-        case .yellow:
-            let diamond = NSBezierPath()
-            diamond.move(to: NSPoint(x: center.x, y: center.y + 2.4))
-            diamond.line(to: NSPoint(x: center.x + 2.4, y: center.y))
-            diamond.line(to: NSPoint(x: center.x, y: center.y - 2.4))
-            diamond.line(to: NSPoint(x: center.x - 2.4, y: center.y))
-            diamond.close()
-            diamond.fill()
-        case .red:
-            let cross = NSBezierPath()
-            cross.lineWidth = 1.6
-            cross.lineCapStyle = .round
-            cross.move(to: NSPoint(x: center.x - 1.8, y: center.y - 1.8))
-            cross.line(to: NSPoint(x: center.x + 1.8, y: center.y + 1.8))
-            cross.move(to: NSPoint(x: center.x - 1.8, y: center.y + 1.8))
-            cross.line(to: NSPoint(x: center.x + 1.8, y: center.y - 1.8))
-            cross.stroke()
-        case .gray:
-            let ring = NSBezierPath(ovalIn: NSRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4))
-            ring.lineWidth = 1.1
-            ring.stroke()
-            NSBezierPath(ovalIn: NSRect(x: center.x - 0.6, y: center.y - 0.6, width: 1.2, height: 1.2)).fill()
+    static func hasNotch(
+        frame: NSRect,
+        safeTop: CGFloat,
+        auxiliaryTopLeftArea: NSRect?,
+        auxiliaryTopRightArea: NSRect?
+    ) -> Bool {
+        guard isUsable(frame), safeTop.isFinite, safeTop > 0,
+              let left = auxiliaryTopLeftArea, isUsable(left),
+              let right = auxiliaryTopRightArea, isUsable(right) else {
+            return false
+        }
+        let top = frame.maxY
+        return left.maxY >= top - 1 && right.maxY >= top - 1 && right.minX > left.maxX
+    }
+
+    static func frame(
+        screenFrame: NSRect,
+        visibleFrame: NSRect,
+        safeTop: CGFloat,
+        auxiliaryTopLeftArea: NSRect?,
+        auxiliaryTopRightArea: NSRect?,
+        expanded: Bool
+    ) -> NSRect {
+        guard isUsable(screenFrame) else { return .zero }
+        let availableFrame = isUsable(visibleFrame) ? visibleFrame : screenFrame
+        let safeTop = safeTop.isFinite ? max(0, safeTop) : 0
+        let notch = hasNotch(
+            frame: screenFrame,
+            safeTop: safeTop,
+            auxiliaryTopLeftArea: auxiliaryTopLeftArea,
+            auxiliaryTopRightArea: auxiliaryTopRightArea
+        )
+        let size: NSSize
+        if expanded {
+            size = NSSize(
+                width: min(expandedSize.width, screenFrame.width),
+                height: min(expandedSize.height, screenFrame.height - safeTop)
+            )
+        } else {
+            let collapsed = notch ? collapsedNotchSize : collapsedScreenSize
+            size = NSSize(width: min(collapsed.width, screenFrame.width), height: min(collapsed.height, screenFrame.height))
+        }
+        let centerX: CGFloat
+        if notch, let left = auxiliaryTopLeftArea, let right = auxiliaryTopRightArea {
+            centerX = (left.maxX + right.minX) / 2
+        } else {
+            centerX = availableFrame.maxX - size.width / 2 - 12
+        }
+        let topY = notch ? screenFrame.maxY : availableFrame.maxY
+        let origin = NSPoint(
+            x: max(screenFrame.minX, min(centerX - size.width / 2, screenFrame.maxX - size.width)),
+            y: max(screenFrame.minY, min(topY - size.height, screenFrame.maxY - size.height))
+        )
+        return NSRect(origin: origin, size: size)
+    }
+
+    private static func isUsable(_ rect: NSRect) -> Bool {
+        rect.origin.x.isFinite && rect.origin.y.isFinite
+            && rect.width.isFinite && rect.height.isFinite
+            && rect.width > 0 && rect.height > 0
+    }
+
+    static func frame(for screen: NSScreen, expanded: Bool) -> NSRect {
+        frame(
+            screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame,
+            safeTop: screen.safeAreaInsets.top,
+            auxiliaryTopLeftArea: screen.auxiliaryTopLeftArea,
+            auxiliaryTopRightArea: screen.auxiliaryTopRightArea,
+            expanded: expanded
+        )
+    }
+}
+
+@MainActor
+final class NotchPanelController: NSObject, NSWindowDelegate {
+    private let model: ProxySentryViewModel
+    private let panel: NSPanel
+    private let trackingView: NotchTrackingView
+    private let contentViewController: NSViewController
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
+    private var screenObserver: NSObjectProtocol?
+    private var expandTask: Task<Void, Never>?
+    private var collapseTask: Task<Void, Never>?
+    private var revealTask: Task<Void, Never>?
+    private var started = false
+
+    init(model: ProxySentryViewModel, contentViewController: NSViewController) {
+        self.model = model
+        self.panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 185, height: 48),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        self.trackingView = NotchTrackingView()
+        self.contentViewController = contentViewController
+        super.init()
+
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.delegate = self
+
+        trackingView.onMouseEntered = { [weak self] in self?.scheduleExpand() }
+        trackingView.onMouseExited = { [weak self] in self?.scheduleCollapse() }
+        panel.contentView = trackingView
+        contentViewController.view.frame = trackingView.bounds
+        contentViewController.view.autoresizingMask = [.width, .height]
+        trackingView.addSubview(contentViewController.view)
+        panel.setAccessibilityLabel("ProxySentry 网络诊断")
+    }
+
+    func start() {
+        guard !started else { return }
+        started = true
+        model.isExpanded = false
+        installMonitors()
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reposition() }
+        }
+        reposition()
+        panel.orderFrontRegardless()
+    }
+
+    func stop() {
+        guard started else { return }
+        started = false
+        expandTask?.cancel()
+        collapseTask?.cancel()
+        revealTask?.cancel()
+        expandTask = nil
+        collapseTask = nil
+        revealTask = nil
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+        localMonitor = nil
+        globalMonitor = nil
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
+        panel.orderOut(nil)
+    }
+
+    func revealForNetworkChange() {
+        guard started else { return }
+        collapseTask?.cancel()
+        collapseTask = nil
+        model.isExpanded = true
+        reposition()
+        revealTask?.cancel()
+        revealTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            guard let self, self.started else { return }
+            guard !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+            self.collapse()
         }
     }
 
-    private static func color(for kind: DiagnosisState.Kind) -> NSColor {
-        switch kind {
-        case .green: .systemGreen
-        case .blue: .systemBlue
-        case .yellow: .systemOrange
-        case .red: .systemRed
-        case .gray: .systemGray
+    func setExpanded(_ expanded: Bool) {
+        guard started else { return }
+        if expanded {
+            collapseTask?.cancel()
+        } else {
+            expandTask?.cancel()
+            revealTask?.cancel()
+        }
+        model.isExpanded = expanded
+        reposition()
+    }
+
+    func collapse() {
+        guard started else { return }
+        expandTask?.cancel()
+        collapseTask?.cancel()
+        revealTask?.cancel()
+        expandTask = nil
+        collapseTask = nil
+        revealTask = nil
+        model.isExpanded = false
+        reposition()
+    }
+
+    private func scheduleExpand() {
+        guard started else { return }
+        collapseTask?.cancel()
+        expandTask?.cancel()
+        expandTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            guard let self, self.started else { return }
+            self.model.isExpanded = true
+            self.reposition()
         }
     }
+
+    private func scheduleCollapse() {
+        guard started else { return }
+        expandTask?.cancel()
+        collapseTask?.cancel()
+        collapseTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            self?.collapse()
+        }
+    }
+
+    private func reposition() {
+        guard let screen = targetScreen() else { return }
+        panel.setFrame(NotchPanelLayout.frame(for: screen, expanded: model.isExpanded), display: true)
+    }
+
+    private func targetScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        let mouse = NSEvent.mouseLocation
+        let index = NotchPanelLayout.preferredScreenIndex(in: screens.map {
+            ($0.frame.contains(mouse), isBuiltIn($0) && hasNotch($0))
+        })
+        return index.map { screens[$0] } ?? NSScreen.main
+    }
+
+    private func hasNotch(_ screen: NSScreen) -> Bool {
+        NotchPanelLayout.hasNotch(
+            frame: screen.frame,
+            safeTop: screen.safeAreaInsets.top,
+            auxiliaryTopLeftArea: screen.auxiliaryTopLeftArea,
+            auxiliaryTopRightArea: screen.auxiliaryTopRightArea
+        )
+    }
+
+    private func isBuiltIn(_ screen: NSScreen) -> Bool {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return false
+        }
+        return CGDisplayIsBuiltin(CGDirectDisplayID(number.uint32Value)) != 0
+    }
+
+    private func installMonitors() {
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyDown, event.keyCode == 53 {
+                self.collapse()
+            } else if event.type != .keyDown, !self.panel.frame.contains(self.screenLocation(of: event)) {
+                self.collapse()
+            }
+            return event
+        }
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                guard self.started, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+                self.collapse()
+            }
+        }
+    }
+
+    private func screenLocation(of event: NSEvent) -> NSPoint {
+        guard let window = event.window else { return NSEvent.mouseLocation }
+        return window.convertPoint(toScreen: event.locationInWindow)
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        reposition()
+    }
+}
+
+private final class NotchTrackingView: NSView {
+    var onMouseEntered: (() -> Void)?
+    var onMouseExited: (() -> Void)?
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) { onMouseEntered?() }
+    override func mouseExited(with event: NSEvent) { onMouseExited?() }
 }
