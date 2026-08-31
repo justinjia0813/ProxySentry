@@ -27,6 +27,30 @@ private final class TriggerRelay: @unchecked Sendable {
     }
 }
 
+struct SustainedFaultRevealPolicy {
+    private static let revealDelay: TimeInterval = 180
+    private var faultStartedAt: TimeInterval?
+    private var hasRevealed = false
+
+    mutating func shouldReveal(kind: DiagnosisState.Kind, at uptime: TimeInterval) -> Bool {
+        switch kind {
+        case .green, .blue:
+            faultStartedAt = nil
+            hasRevealed = false
+            return false
+        case .yellow, .red, .gray:
+            guard let faultStartedAt, uptime >= faultStartedAt else {
+                self.faultStartedAt = uptime
+                hasRevealed = false
+                return false
+            }
+            guard !hasRevealed, uptime - faultStartedAt >= Self.revealDelay else { return false }
+            hasRevealed = true
+            return true
+        }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = ProxySentryViewModel()
@@ -35,19 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pathObserver: PathObserver?
     private var proxyObserver: ProxyObserver?
     private var timerTask: Task<Void, Never>?
+    private var sustainedFaultRevealPolicy = SustainedFaultRevealPolicy()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard NSClassFromString("XCTestCase") == nil else { return }
 
         let relay = TriggerRelay()
-        let pathObserver = PathObserver { [weak self] in
-            relay.trigger()
-            Task { @MainActor in self?.panelController?.revealForNetworkChange() }
-        }
-        let proxyObserver = ProxyObserver { [weak self] in
-            relay.trigger()
-            Task { @MainActor in self?.panelController?.revealForNetworkChange() }
-        }
+        let pathObserver = PathObserver { relay.trigger() }
+        let proxyObserver = ProxyObserver { relay.trigger() }
 
         let controller = DiagnosticsController(
             sleep: { try await Task.sleep(for: $0) },
@@ -135,11 +154,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshFromController() {
         guard let controller else { return }
-        model.state = controller.committedState ?? .gray
+        let committedState = controller.committedState
+        model.state = committedState ?? .gray
         model.isChecking = controller.isChecking
         model.lastCheckedAt = controller.lastCheckedAt
         model.evidence = controller.evidence
         model.clashSummary = Self.clashText(controller.clashSummary)
+        if let committedState,
+           sustainedFaultRevealPolicy.shouldReveal(
+               kind: committedState.kind,
+               at: ProcessInfo.processInfo.systemUptime
+           ) {
+            panelController?.revealForSustainedFault()
+        }
     }
 
     private func postNotification(previous: DiagnosisState?, current: DiagnosisState) {
@@ -564,7 +591,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         panel.orderOut(nil)
     }
 
-    func revealForNetworkChange() {
+    func revealForSustainedFault() {
         guard started else { return }
         collapseTask?.cancel()
         collapseTask = nil

@@ -4,6 +4,19 @@ import XCTest
 
 @MainActor
 final class ProxySentryAppTests: XCTestCase {
+    func testPanelRevealsOnceOnlyAfterThreeMinutesOfContinuousFault() {
+        var policy = SustainedFaultRevealPolicy()
+
+        XCTAssertFalse(policy.shouldReveal(kind: .red, at: 1_000))
+        XCTAssertFalse(policy.shouldReveal(kind: .gray, at: 1_179))
+        XCTAssertTrue(policy.shouldReveal(kind: .yellow, at: 1_180))
+        XCTAssertFalse(policy.shouldReveal(kind: .red, at: 1_600))
+
+        XCTAssertFalse(policy.shouldReveal(kind: .green, at: 1_601))
+        XCTAssertFalse(policy.shouldReveal(kind: .red, at: 1_602))
+        XCTAssertTrue(policy.shouldReveal(kind: .red, at: 1_782))
+    }
+
     func testHostedTestsDoNotInstallGlobalUI() {
         let delegate = AppDelegate()
         delegate.applicationDidFinishLaunching(
