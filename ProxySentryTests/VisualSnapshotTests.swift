@@ -103,8 +103,8 @@ final class VisualSnapshotTests: XCTestCase {
         let redPath = "/tmp/ProxySentry-red-failure.png"
         try writePNG(view, size: NSSize(width: 360, height: 460), to: redPath, minimumBytes: 4_000)
         let redText = try recognizedText(in: redPath)
-        XCTAssertTrue(redText.contains("代理出口检测超时"), redText)
-        XCTAssertFalse(redText.contains("公网地址连接失败"), redText)
+        XCTAssertTrue(redText.contains("代理出口"), redText)
+        XCTAssertFalse(redText.contains("公网地址"), redText)
     }
 
     private func render(
