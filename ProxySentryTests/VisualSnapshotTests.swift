@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Vision
 import XCTest
 @testable import ProxySentry
 
@@ -58,6 +59,52 @@ final class VisualSnapshotTests: XCTestCase {
             to: "/tmp/ProxySentry-popover-overflow.png",
             minimumBytes: 4_000
         )
+    }
+
+    func testBaseFailureDoesNotPresentDownstreamTimeoutAsProxyFault() throws {
+        let model = ProxySentryViewModel()
+        model.state = .grayLocalNetwork
+        model.isExpanded = true
+        model.evidence = [
+            ProbeEvidence(category: .gateway, outcome: .failure, milliseconds: 20, userVisibleDescription: "默认网关连接失败"),
+            ProbeEvidence(category: .publicIP, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "公网地址检测超时"),
+            ProbeEvidence(category: .direct, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "直连检测超时"),
+            ProbeEvidence(category: .proxy, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "代理出口检测超时"),
+            ProbeEvidence(category: .node, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "当前代理节点检测超时"),
+        ]
+        let view = StatusPopoverView(
+            model: model,
+            onRecheck: {}, onOpenClash: {}, onCopySummary: {},
+            onLoginChanged: { _ in }, onOpenLoginSettings: {},
+            onPresentationChanged: { _ in }, onQuit: {}
+        )
+
+        let localPath = "/tmp/ProxySentry-local-network-failure.png"
+        try writePNG(view, size: NSSize(width: 360, height: 460), to: localPath, minimumBytes: 4_000)
+        let localText = try recognizedText(in: localPath)
+        XCTAssertTrue(localText.contains("BASE FAILURE"), localText)
+        XCTAssertEqual(localText.components(separatedBy: "BLOCKED").count - 1, 2, localText)
+        XCTAssertFalse(localText.contains("UPSTREAM FAILURE"), localText)
+
+        model.state = .grayExternal
+        model.evidence = [
+            ProbeEvidence(category: .gateway, outcome: .success, milliseconds: 20, userVisibleDescription: "默认网关可用"),
+            ProbeEvidence(category: .publicIP, outcome: .failure, milliseconds: 3000, userVisibleDescription: "公网地址连接失败"),
+            ProbeEvidence(category: .direct, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "直连检测超时"),
+            ProbeEvidence(category: .proxy, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "代理出口检测超时"),
+        ]
+        let externalPath = "/tmp/ProxySentry-base-network-failure.png"
+        try writePNG(view, size: NSSize(width: 360, height: 460), to: externalPath, minimumBytes: 4_000)
+        let externalText = try recognizedText(in: externalPath)
+        XCTAssertTrue(externalText.split(separator: "\n").contains { $0.hasSuffix("FAIL") && $0 != "BASE FAILURE" }, externalText)
+        XCTAssertEqual(externalText.components(separatedBy: "BLOCKED").count - 1, 2, externalText)
+
+        model.state = .red
+        let redPath = "/tmp/ProxySentry-red-failure.png"
+        try writePNG(view, size: NSSize(width: 360, height: 460), to: redPath, minimumBytes: 4_000)
+        let redText = try recognizedText(in: redPath)
+        XCTAssertTrue(redText.contains("代理出口检测超时"), redText)
+        XCTAssertFalse(redText.contains("公网地址连接失败"), redText)
     }
 
     private func render(
@@ -127,6 +174,16 @@ final class VisualSnapshotTests: XCTestCase {
         try png.write(to: URL(fileURLWithPath: path), options: .atomic)
         XCTAssertGreaterThan(png.count, minimumBytes)
         XCTAssertLessThan(png.count, 500_000)
+    }
+
+    private func recognizedText(in path: String) throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        try VNImageRequestHandler(url: URL(fileURLWithPath: path)).perform([request])
+        return (request.results ?? [])
+            .compactMap { $0.topCandidates(1).first?.string }
+            .joined(separator: "\n")
     }
 
     private func brightPixelCount(in bitmap: NSBitmapImageRep, viewSize: NSSize, rect: NSRect) -> Int {

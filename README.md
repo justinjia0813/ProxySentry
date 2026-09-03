@@ -4,26 +4,28 @@
 
 ProxySentry 是一款轻量、只读的 macOS 网络诊断工具。它把基础网络、代理流量、当前节点和 Clash 内核拆成四层证据，并把结果收纳在刘海或屏幕顶部；不切换节点，不修改代理配置。
 
-[下载 2.0 未签名预览版](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.0.0) · [查看全部版本](https://github.com/justinjia0813/ProxySentry/releases) · [报告问题](https://github.com/justinjia0813/ProxySentry/issues)
+[下载 2.1 未签名预览版](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.1.0) · [查看全部版本](https://github.com/justinjia0813/ProxySentry/releases) · [报告问题](https://github.com/justinjia0813/ProxySentry/issues)
 
-![ProxySentry 2.0 终端风格诊断面板](docs/assets/proxysentry-2.0.png)
+![ProxySentry 2.1 终端风格诊断面板](docs/assets/proxysentry-2.0.png)
 
 > [!IMPORTANT]
-> GitHub 上提供的是 2.0.0 未签名预览包。它没有 Developer ID（Developer Identifier，开发者标识；Apple 用来识别独立开发者签名身份）签名，也没有通过 Apple 公证，macOS Gatekeeper 会拦截它。现阶段适合开发测试，不是面向普通用户的免提示安装包。
+> GitHub 上提供的是 2.1.0 未签名预览包。它没有 Developer ID（Developer Identifier，开发者标识；Apple 用来识别独立开发者签名身份）签名，也没有通过 Apple 公证，macOS Gatekeeper 会拦截它。现阶段适合开发测试，不是面向普通用户的免提示安装包。
 
-## 2.0 有什么不同
+## 2.1 有什么不同
 
 - 不占用菜单栏或 Dock；有刘海时收进刘海区域，无刘海显示器退化为顶部居中胶囊。
 - 鼠标移入时展开，离开、外部点击或按 Escape 后收起。
 - 网络变化只在后台复检，不因短暂波动打断用户；异常连续至少 3 分钟才主动提示一次，恢复后才允许再次提醒。
 - 使用终端风格的高对比界面，同时适配深色、浅色、多屏、全屏 Space、长文本和 VoiceOver。
 - 只使用公开 AppKit 接口，不申请辅助功能权限，不使用 macOS 私有窗口接口。
+- 基础网络失败时明确显示 `BASE FAILURE`，代理流量和节点检测标记为 `BLOCKED`，不把下游超时误判为机场故障。
+- 每轮确认诊断会生成仅当前用户可读的脱敏状态文件，供本机或远程 Agent 查询。
 
 ## 下载与安装
 
 下载当前预览版：
 
-1. 打开 [ProxySentry 2.0.0 Preview](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.0.0)。
+1. 打开 [ProxySentry 2.1.0 Preview](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.1.0)。
 2. 在 **Assets** 中下载 macOS 通用构建，而不是 GitHub 自动生成的源码压缩包。
 3. 解压，将 `ProxySentry.app` 拖入“应用程序”，然后打开。
 
@@ -41,6 +43,18 @@ ProxySentry 是一款轻量、只读的 macOS 网络诊断工具。它把基础�
 | `clash` | Clash Verge Rev 的 Mihomo 内核和本地接口是否可用？ | 内核状态尚未确认。 |
 
 状态颜色保持一致：绿色正常，橙色需要关注，红色故障，灰色未知。面板同时保留异常摘要，避免只有颜色没有原因。
+
+## 给远程 Agent 读取
+
+ProxySentry 每轮确认诊断后，会把同一份脱敏证据原子写入 JavaScript Object Notation（JSON，JavaScript 对象表示法；便于程序读取的结构化文本格式）文件：
+
+```text
+~/Library/Application Support/ProxySentry/agent-status.json
+```
+
+在手机端连接远程 Mac 的 Agent 后，可以直接要求它“读取 ProxySentry 的 agent-status.json，报告这台 Mac 的直连、代理、节点和 Clash 状态”。文件包含 `checkedAt`、`expiresAt`、主结论和逐项证据；缺少某类证据时，`missingEvidence` 明确规定该层为 `unknown`（未知），不代表成功或失败。当前时间晚于 `expiresAt` 时，Agent 必须说明状态已过期，并提示确认 ProxySentry 是否仍在运行，不能把旧结果当作当前网络。
+
+该文件权限为仅当前 macOS 用户可读写，不包含原始连接、节点名称、订阅地址、访问密钥或原始 Clash 响应。它只供已能在这台 Mac 上执行命令的本地或远程 Agent 读取，不开放网络端口，也不提供远程控制。
 
 ## 隐私与权限
 
@@ -78,12 +92,12 @@ xcodebuild -project ProxySentry.xcodeproj -scheme ProxySentry -configuration Deb
 
 ## 发布可信度
 
-截至 2026-08-31：
+截至 2026-09-03：
 
 | 项目 | 状态 |
 | --- | --- |
-| 2.0 源码与通用构建 | 已完成 |
-| GitHub Release 下载入口 | `preview-v2.0.0` 未签名预览版 |
+| 2.1 源码与通用构建 | 已完成 |
+| GitHub Release 下载入口 | `preview-v2.1.0` 未签名预览版 |
 | Developer ID 签名 | 未完成；本机没有可用签名身份 |
 | Apple 公证与票据装订 | 未完成 |
 | Gatekeeper 验证 | 当前公开包会被拒绝 |

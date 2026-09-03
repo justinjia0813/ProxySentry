@@ -125,6 +125,18 @@ final class DiagnosticsControllerTests: XCTestCase {
         XCTAssertEqual(d.pendingCount, 0)
     }
 
+    func testRecoveryToCommittedStateClearsTransientCandidate() {
+        var d = StateDebouncer()
+        XCTAssertNil(d.accept(.green))
+        XCTAssertEqual(d.accept(.green), .green)
+        XCTAssertNil(d.accept(.red))
+        XCTAssertEqual(d.pendingKind, .red)
+
+        XCTAssertNil(d.accept(.green))
+        XCTAssertNil(d.pendingState)
+        XCTAssertEqual(d.pendingCount, 0)
+    }
+
     func testDifferentCausesWithSameKindNeedSeparateConfirmation() {
         var d = StateDebouncer()
         XCTAssertNil(d.accept(.redCurrentNode))
@@ -719,6 +731,27 @@ extension DiagnosticsControllerTests {
         )
         XCTAssertEqual(round.state, .grayExternal)
         XCTAssertEqual(round.state.kind, .gray)
+    }
+
+    func testRoundBaseDownWithClashTimeoutsStaysABaseNetworkFailure() async {
+        var clash = testClash(true)
+        clash.activeProxyProbe = probeOut(.timeout)
+        clash.alternateNodeProbes = [probeOut(.timeout), probeOut(.timeout)]
+
+        let round = await DiagnosticsController.makeRound(
+            pathSnapshot: { PathSnapshot(satisfied: true, interfaceType: "wifi", supportsDNS: true) },
+            proxySnapshot: { ProxySnapshot(httpProxy: FixedProxy(host: "127.0.0.1", port: 7890)) },
+            dnsResolves: { _ in false },
+            runDirect: { [self.probeOut(.failure), self.probeOut(.timeout)] },
+            runLocal: { _ in self.probeOut(.success) },
+            runProxy: { _ in [self.probeOut(.timeout), self.probeOut(.timeout)] },
+            readClash: { _ in clash },
+            gatewayProbe: { self.probeOut(.failure) },
+            publicIPProbes: { [self.probeOut(.failure), self.probeOut(.timeout)] }
+        )
+
+        XCTAssertEqual(round.state, .grayLocalNetwork)
+        XCTAssertNotEqual(round.state.kind, .red)
     }
 
     func testRoundDnsConfigConclusionIsYellow() async {

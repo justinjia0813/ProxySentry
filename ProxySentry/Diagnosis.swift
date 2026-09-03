@@ -302,7 +302,11 @@ struct StateDebouncer: Sendable {
     /// Feed one fresh round result.
     /// Returns the state to commit and notify now, or nil when nothing is confirmed.
     mutating func accept(_ state: DiagnosisState) -> DiagnosisState? {
-        guard state != committedState else { return nil }
+        guard state != committedState else {
+            pendingState = nil
+            pendingCount = 0
+            return nil
+        }
         if state == pendingState {
             pendingCount += 1
         } else {

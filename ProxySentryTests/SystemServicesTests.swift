@@ -151,4 +151,54 @@ final class SystemServicesTests: XCTestCase {
         XCTAssertTrue(summary.contains(gray.missingEvidenceExplanation))
         assertSanitized(summary, "gray summary")
     }
+
+    func testAgentStatusIsStructuredExpiringAndOwnerReadableOnly() throws {
+        let checkedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let evidence = [
+            ProbeEvidence(
+                category: .direct,
+                outcome: .success,
+                milliseconds: 12,
+                userVisibleDescription: "直连可用"
+            ),
+        ]
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let destination = directory.appendingPathComponent("agent-status.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755]
+        )
+
+        try SystemServices.writeAgentStatus(
+            state: .blue,
+            evidence: evidence,
+            checkedAt: checkedAt,
+            to: destination
+        )
+
+        let data = try Data(contentsOf: destination)
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let diagnosis = try XCTUnwrap(root["diagnosis"] as? [String: Any])
+        let exportedEvidence = try XCTUnwrap(root["evidence"] as? [[String: Any]])
+        XCTAssertEqual(root["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(root["checkedAt"] as? String, "2023-11-14T22:13:20.000Z")
+        XCTAssertEqual(root["expiresAt"] as? String, "2023-11-14T22:15:20.000Z")
+        XCTAssertEqual(root["missingEvidence"] as? String, "unknown")
+        XCTAssertEqual(diagnosis["state"] as? String, "blue")
+        XCTAssertEqual(exportedEvidence.first?["category"] as? String, "direct")
+        XCTAssertEqual(exportedEvidence.first?["outcome"] as? String, "success")
+        let permissions = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: destination.path)[.posixPermissions] as? NSNumber
+        )
+        XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+        let directoryPermissions = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber
+        )
+        XCTAssertEqual(directoryPermissions.intValue & 0o777, 0o700)
+    }
 }

@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var proxyObserver: ProxyObserver?
     private var timerTask: Task<Void, Never>?
     private var sustainedFaultRevealPolicy = SustainedFaultRevealPolicy()
+    private var lastAgentStatusDate: Date?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard NSClassFromString("XCTestCase") == nil else { return }
@@ -160,6 +161,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.lastCheckedAt = controller.lastCheckedAt
         model.evidence = controller.evidence
         model.clashSummary = Self.clashText(controller.clashSummary)
+        if let committedState,
+           let checkedAt = controller.lastCheckedAt,
+           controller.pendingCandidate == nil,
+           !controller.isChecking,
+           checkedAt != lastAgentStatusDate {
+            do {
+                try SystemServices.writeAgentStatus(
+                    state: committedState,
+                    evidence: controller.evidence,
+                    checkedAt: checkedAt
+                )
+                lastAgentStatusDate = checkedAt
+            } catch {
+                model.notice = "Agent 状态写入失败"
+            }
+        }
         if let committedState,
            sustainedFaultRevealPolicy.shouldReveal(
                kind: committedState.kind,

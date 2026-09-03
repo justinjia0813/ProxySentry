@@ -307,8 +307,9 @@ struct StatusPopoverView: View {
         return model.evidence.filter {
             $0.outcome != .success
                 && $0.outcome != .unavailable
-                && $0.category != .gateway
-                && $0.category != .publicIP
+                && (baseNetworkFailed
+                    ? [.direct, .gateway, .publicIP].contains($0.category)
+                    : $0.category != .gateway && $0.category != .publicIP)
                 && seen.insert($0.userVisibleDescription).inserted
         }
     }
@@ -319,14 +320,21 @@ struct StatusPopoverView: View {
 
     private var routeRows: [RouteRow] {
         return [
-            routeRow(id: "base", name: "base", categories: [.direct, .publicIP]),
             routeRow(
+                id: "base",
+                name: "base",
+                categories: [.direct, .gateway, .publicIP],
+                successRequiresAll: baseNetworkFailed
+            ),
+            baseNetworkFailed ? blockedRouteRow(id: "traffic", name: "traffic") : routeRow(
                 id: "traffic",
                 name: "traffic",
                 categories: [.clashTraffic],
                 successLabel: "ACTIVE"
             ),
-            routeRow(id: "proxy", name: "proxy", categories: [.node]),
+            baseNetworkFailed
+                ? blockedRouteRow(id: "proxy", name: "proxy")
+                : routeRow(id: "proxy", name: "proxy", categories: [.node]),
             routeRow(
                 id: "clash",
                 name: "clash",
@@ -334,6 +342,14 @@ struct StatusPopoverView: View {
                 successRequiresAll: true
             ),
         ]
+    }
+
+    private var baseNetworkFailed: Bool {
+        model.state == .grayLocalNetwork || model.state == .grayExternal
+    }
+
+    private func blockedRouteRow(id: String, name: String) -> RouteRow {
+        RouteRow(id: id, name: name, status: "BLOCKED", latency: "—", symbol: "○", color: .gray)
     }
 
     private func routeRow(
@@ -427,7 +443,7 @@ private extension DiagnosisState {
         case .blue: "DIRECT PASS"
         case .yellow: "LOCAL PROXY CONFIG"
         case .red: "UPSTREAM FAILURE"
-        case .gray: "UNKNOWN"
+        case .gray: self == .grayLocalNetwork || self == .grayExternal ? "BASE FAILURE" : "UNKNOWN"
         }
     }
 
@@ -451,7 +467,7 @@ private extension DiagnosisState {
         case .blue: "DIRECT"
         case .yellow: "LOCAL"
         case .red: "UPSTREAM"
-        case .gray: "UNKNOWN"
+        case .gray: self == .grayLocalNetwork || self == .grayExternal ? "BASE" : "UNKNOWN"
         }
     }
 }
