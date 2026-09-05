@@ -574,7 +574,7 @@ extension DiagnosticsControllerTests {
         XCTAssertFalse(round.evidence.contains { $0.category == .direct })
     }
 
-    func testHealthyNodeAndFailingSystemProxyExitIsLocalConfigFailure() async {
+    func testHealthyNodeAndTwoFailingSystemProxyTargetsDetectFalseGreenEntryDial() async {
         var clash = self.testClash(true)
         clash.activeProxyProbe = self.probeOut(.success)
         let round = await DiagnosticsController.makeRound(
@@ -586,7 +586,7 @@ extension DiagnosticsControllerTests {
             runProxy: { _ in [self.probeOut(.failure), self.probeOut(.timeout)] },
             readClash: { _ in clash }
         )
-        XCTAssertEqual(round.state.kind, .yellow)
+        XCTAssertEqual(round.state, .redEntryDial)
         XCTAssertTrue(round.evidence.contains {
             $0.category == .node && $0.outcome == .success
         })
@@ -686,6 +686,79 @@ extension DiagnosticsControllerTests {
         XCTAssertEqual(controller.maxConcurrentDiagnoses, 1)
     }
 
+    func testTransientTimeoutIsHiddenButSustainedTimeoutIsPublished() async throws {
+        let budgetGate = Gate()
+        let confirmationGate = Gate()
+        let recheckIndex = LockedBox(0)
+        let roundIndex = LockedBox(0)
+        let success = ProbeEvidence(
+            category: .proxy, outcome: .success, milliseconds: 20,
+            userVisibleDescription: "代理出口可用"
+        )
+        let timeout = ProbeEvidence(
+            category: .proxy, outcome: .timeout, milliseconds: 3_000,
+            userVisibleDescription: "代理出口检测超时"
+        )
+        let rounds = [
+            DiagnosticsController.DiagnosisRound(state: .green, evidence: [success], clashSummary: nil),
+            DiagnosticsController.DiagnosisRound(state: .green, evidence: [success], clashSummary: nil),
+            DiagnosticsController.DiagnosisRound(state: .red, evidence: [timeout], clashSummary: nil),
+            DiagnosticsController.DiagnosisRound(state: .green, evidence: [success], clashSummary: nil),
+            DiagnosticsController.DiagnosisRound(state: .red, evidence: [timeout], clashSummary: nil),
+            DiagnosticsController.DiagnosisRound(state: .red, evidence: [timeout], clashSummary: nil),
+        ]
+
+        let controller = DiagnosticsController(
+            sleep: { duration in
+                if duration == .seconds(2) {
+                    var index = 0
+                    recheckIndex.update {
+                        index = $0
+                        $0 += 1
+                    }
+                    if index == 1 { await confirmationGate.wait() }
+                    return
+                }
+                await budgetGate.wait()
+            },
+            round: {
+                var index = 0
+                roundIndex.update {
+                    index = $0
+                    $0 += 1
+                }
+                return rounds[index]
+            }
+        )
+        defer {
+            confirmationGate.open()
+            budgetGate.open()
+            controller.stop()
+        }
+        controller.start()
+        controller.trigger()
+        await waitUntil { controller.committedKind == .green && controller.diagnoseCallCount == 2 }
+        let confirmedAt = controller.lastCheckedAt
+
+        controller.trigger()
+        await waitUntil { controller.pendingCandidate == .red && controller.diagnoseCallCount == 3 }
+
+        XCTAssertEqual(controller.committedKind, .green)
+        XCTAssertEqual(controller.evidence, [success], "unconfirmed timeout must not flash in the UI")
+        XCTAssertEqual(controller.lastCheckedAt, confirmedAt)
+
+        confirmationGate.open()
+        await waitUntil { controller.pendingCandidate == nil && controller.diagnoseCallCount == 4 }
+        XCTAssertEqual(controller.committedKind, .green)
+        XCTAssertEqual(controller.evidence, [success])
+
+        controller.trigger()
+        await waitUntil { controller.committedKind == .red && controller.diagnoseCallCount == 6 }
+
+        XCTAssertEqual(controller.evidence, [timeout])
+        XCTAssertEqual(controller.recheckCount, 3, "sustained timeout remains a two-round fast confirmation")
+    }
+
     // MARK: - Base-network wiring (PLAN §B)
 
     func testRoundWiresBaseNetworkAndTrafficEvidence() async {
@@ -752,6 +825,29 @@ extension DiagnosticsControllerTests {
 
         XCTAssertEqual(round.state, .grayLocalNetwork)
         XCTAssertNotEqual(round.state.kind, .red)
+    }
+
+    func testPacRouteUsesMixedPortEvidenceToDetectFalseGreenEntryDial() async {
+        var clash = testClash(true)
+        clash.activeProxyProbe = probeOut(.success)
+        clash.mixedPortProbe = probeOut(.success)
+        clash.mixedPortProxyProbes = [probeOut(.timeout), probeOut(.timeout)]
+
+        let round = await DiagnosticsController.makeRound(
+            pathSnapshot: { self.pathUp() },
+            proxySnapshot: { ProxySnapshot(pacConfigured: true) },
+            dnsResolves: { _ in true },
+            runDirect: { [self.probeOut(.success), self.probeOut(.success)] },
+            runLocal: { _ in self.probeOut(.unavailable) },
+            runProxy: { _ in [] },
+            readClash: { _ in clash },
+            gatewayProbe: { self.probeOut(.success) },
+            publicIPProbes: { [self.probeOut(.success), self.probeOut(.success)] }
+        )
+
+        XCTAssertEqual(round.state, .redEntryDial)
+        XCTAssertEqual(round.evidence.filter { $0.category == .proxy }.count, 2)
+        XCTAssertTrue(round.evidence.contains { $0.category == .localPort && $0.outcome == .success })
     }
 
     func testRoundDnsConfigConclusionIsYellow() async {

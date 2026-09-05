@@ -24,5 +24,8 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           CODE_SIGNING_REQUIRED=NO
 
+      - name: Test independent watchdog with synthetic configurations
+        run: /usr/bin/ruby ProxySentryTests/watchdog_test.rb
+
       - name: Build unsigned universal package
         run: ./scripts/package-release.sh

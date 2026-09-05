@@ -164,6 +164,32 @@ final class DiagnosisTests: XCTestCase {
         XCTAssertNotEqual(state.kind, .red, "single proxy outcome must not be red")
     }
 
+    func testHealthyNodeDelayButRealProxyTimeoutsIdentifyFalseGreenEntryDial() {
+        var s = redCandidate()
+        s.clashActiveProxyOutcome = .success
+        s.proxyOutcomes = [.timeout, .timeout]
+
+        let state = DiagnosisClassifier.classify(s)
+
+        XCTAssertEqual(state.kind, .red)
+        XCTAssertEqual(state.title, "节点假绿：疑似入口拨号失败")
+    }
+
+    func testOldTrafficCountersCannotMaskCurrentFalseGreen() {
+        var s = redCandidate()
+        s.clashActiveProxyOutcome = .success
+        s.clashTrafficObserved = true
+        XCTAssertEqual(DiagnosisClassifier.classify(s), .redEntryDial)
+    }
+
+    func testVerifiedMixedPortFailureCanIdentifyRedWithoutFixedSystemProxy() {
+        var s = redCandidate()
+        s.pacConfigured = true
+        s.proxyExitVerifiedThroughSystemRoute = false
+        s.proxyExitVerifiedThroughClashRoute = true
+        XCTAssertEqual(DiagnosisClassifier.classify(s), .red)
+    }
+
     // MARK: - 5. Red near-misses: exactly one gate mutated each
 
     func testRedNearMissesSingleGateMutations() {

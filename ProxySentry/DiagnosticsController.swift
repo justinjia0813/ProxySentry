@@ -38,6 +38,10 @@ final class DiagnosticsController {
         var localPortMatchesConfiguredProxy: Bool
         var summary: ClashSummary
         var activeProxyProbe: NetworkProbes.ProbeOutput? = nil
+        /// Read-only probes through Clash's loopback mixed port when PAC or
+        /// auto-discovery prevents resolving the concrete system route.
+        var mixedPortProbe: NetworkProbes.ProbeOutput? = nil
+        var mixedPortProxyProbes: [NetworkProbes.ProbeOutput] = []
         var tunEnabled = false
         /// True when /connections telemetry observed non-direct traffic; nil = no
         /// evidence. Absence is never treated as a failure.
@@ -197,7 +201,11 @@ final class DiagnosticsController {
         let clash = await clashRead
         let (dns, direct, local, fixedProxyOut, gateway, publics) =
             await (dnsOK, directOut, localOut, proxyExit, gatewayOut, publicOut)
-        let proxyOut = fixedProxyOut
+        let usesClashMixedPort = webProxy == nil
+            && (proxy.pacConfigured || proxy.autoDiscovery)
+            && clash.mixedPortProbe != nil
+        let proxyOut = usesClashMixedPort ? clash.mixedPortProxyProbes : fixedProxyOut
+        let effectiveLocal = usesClashMixedPort ? clash.mixedPortProbe : (localProxy == nil ? nil : local)
 
         // 3. Whitelisted evidence only (existing categories; no raw payloads).
         var evidence: [ProbeEvidence] = []
@@ -221,11 +229,11 @@ final class DiagnosticsController {
                 milliseconds: node.milliseconds,
                 userVisibleDescription: Self.description(for: node, path: "当前代理节点")))
         }
-        if localProxy != nil {
+        if let effectiveLocal {
             evidence.append(ProbeEvidence(
-                category: .localPort, outcome: Self.outcome(from: local),
-                milliseconds: local.milliseconds,
-                userVisibleDescription: Self.description(for: local, path: "本地代理端口")))
+                category: .localPort, outcome: Self.outcome(from: effectiveLocal),
+                milliseconds: effectiveLocal.milliseconds,
+                userVisibleDescription: Self.description(for: effectiveLocal, path: "本地代理端口")))
         }
         if proxy.hasAnyProxyPath || clash.infoAvailable {
             evidence.append(ProbeEvidence(
@@ -273,12 +281,13 @@ final class DiagnosticsController {
         snap.directOutcomes = clash.tunEnabled ? [] : direct.map { Self.outcome(from: $0) }
         snap.proxyOutcomes = proxyOut.map { Self.outcome(from: $0) }
         snap.clashActiveProxyOutcome = clash.activeProxyProbe.map { Self.outcome(from: $0) }
-        snap.localProxyEndpointConfigured = localProxy != nil
+        snap.localProxyEndpointConfigured = localProxy != nil || usesClashMixedPort
         snap.proxyExitVerifiedThroughSystemRoute = webProxy != nil
-        snap.localProxyPortReachable = local.outcome == .success
+        snap.proxyExitVerifiedThroughClashRoute = usesClashMixedPort
+        snap.localProxyPortReachable = effectiveLocal?.outcome == .success
         snap.clashVersionOutcome = clash.versionOk ? .success : .failure
         snap.clashConfigsOutcome = clash.configsOk ? .success : .failure
-        snap.clashPortsMatchConfiguredProxy = clash.localPortMatchesConfiguredProxy
+        snap.clashPortsMatchConfiguredProxy = usesClashMixedPort || clash.localPortMatchesConfiguredProxy
         snap.clashInfoAvailable = clash.infoAvailable
         snap.pacConfigured = proxy.pacConfigured
         snap.proxyAutoDiscovery = proxy.autoDiscovery
@@ -388,12 +397,13 @@ final class DiagnosticsController {
                 }
             }
         }
-        // Publish latest round evidence/summary/timestamp regardless of commit.
         lock.withLock {
             _pendingCandidate = debouncer.pendingKind
-            _latestEvidence = round.evidence
-            _latestClashSummary = round.clashSummary
-            _lastCheckedAt = Date()
+            if committed {
+                _latestEvidence = round.evidence
+                _latestClashSummary = round.clashSummary
+                _lastCheckedAt = Date()
+            }
         }
         if changedState != nil {
             await onCommit(previousState, round.state)

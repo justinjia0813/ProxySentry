@@ -6,6 +6,33 @@ import XCTest
 
 @MainActor
 final class VisualSnapshotTests: XCTestCase {
+    func testExpandedPanelClearlyShowsAllClashModesAndUnknown() throws {
+        let model = sampleModel()
+        model.isExpanded = true
+        for (raw, label): (String?, String) in [
+            ("rule", "规则模式"), ("global", "全局模式"), ("direct", "直连模式"), (nil, "模式未知")
+        ] {
+            model.clashMode = raw
+            for scheme in [ColorScheme.light, .dark] {
+                let path = "/tmp/ProxySentry-mode-\(raw ?? "unknown")-\(scheme == .light ? "light" : "dark").png"
+                try writePNG(popover(model, scheme: scheme), size: NSSize(width: 360, height: 460), to: path, minimumBytes: 4_000)
+                let text = try recognizedText(in: path)
+                XCTAssertTrue(text.contains(label), text)
+            }
+        }
+    }
+
+    func testRenderWatchdogSettingsOffByDefault() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let watchdog = WatchdogController(home: home)
+        XCTAssertFalse(watchdog.enabled)
+        try writePNG(WatchdogSettingsView(watchdog: watchdog), size: NSSize(width: 480, height: 430),
+                     to: "/tmp/ProxySentry-watchdog-settings.png", minimumBytes: 4_000)
+        let text = try recognizedText(in: "/tmp/ProxySentry-watchdog-settings.png")
+        XCTAssertTrue(text.contains("未启用"), text)
+        XCTAssertTrue(text.contains("检查运行条件"), text)
+    }
+
     func testRenderLightAndDarkPopovers() throws {
         try render(.light, expanded: true, to: "/tmp/ProxySentry-popover-light.png")
         try render(.dark, expanded: true, to: "/tmp/ProxySentry-popover-dark.png")
@@ -107,6 +134,49 @@ final class VisualSnapshotTests: XCTestCase {
         XCTAssertFalse(redText.contains("公网地址"), redText)
     }
 
+    func testFalseGreenEntryDialShowsNodePassAndRealTrafficTimeout() throws {
+        let model = ProxySentryViewModel()
+        model.state = .redEntryDial
+        model.isExpanded = true
+        model.evidence = [
+            ProbeEvidence(category: .direct, outcome: .success, milliseconds: 18, userVisibleDescription: "直连可用"),
+            ProbeEvidence(category: .node, outcome: .success, milliseconds: 94, userVisibleDescription: "当前代理节点可用"),
+            ProbeEvidence(category: .proxy, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "代理出口检测超时"),
+            ProbeEvidence(category: .proxy, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "代理出口检测超时"),
+            ProbeEvidence(category: .clashVersion, outcome: .success, milliseconds: 0, userVisibleDescription: "Clash 内核运行正常"),
+            ProbeEvidence(category: .clashConfigs, outcome: .success, milliseconds: 0, userVisibleDescription: "Clash 配置读取正常"),
+        ]
+        let path = "/tmp/ProxySentry-entry-dial-failure.png"
+        try writePNG(
+            popover(model, scheme: .dark),
+            size: NSSize(width: 360, height: 460),
+            to: path,
+            minimumBytes: 4_000
+        )
+
+        let text = try recognizedText(in: path)
+        XCTAssertTrue(text.contains("ENTRY DIAL SUSPECT"), text)
+        XCTAssertTrue(text.contains("TIMEOUT"), text)
+        XCTAssertTrue(text.split(separator: "\n").contains { $0.hasSuffix("PASS") }, text)
+
+        model.state = .green
+        model.evidence = [
+            ProbeEvidence(category: .proxy, outcome: .success, milliseconds: 80, userVisibleDescription: "代理出口可用"),
+            ProbeEvidence(category: .proxy, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "代理出口检测超时"),
+        ]
+        let mixedPath = "/tmp/ProxySentry-partial-proxy-success.png"
+        try writePNG(
+            popover(model, scheme: .dark),
+            size: NSSize(width: 360, height: 460),
+            to: mixedPath,
+            minimumBytes: 4_000
+        )
+        let mixedText = try recognizedText(in: mixedPath)
+        XCTAssertTrue(mixedText.contains("ACTIVE"), mixedText)
+        XCTAssertFalse(mixedText.contains("3000 ms"), mixedText)
+        XCTAssertFalse(mixedText.contains("代理出口检测超时"), mixedText)
+    }
+
     private func render(
         _ scheme: ColorScheme,
         expanded: Bool,
@@ -127,7 +197,8 @@ final class VisualSnapshotTests: XCTestCase {
         let model = ProxySentryViewModel()
         model.state = .yellow
         model.lastCheckedAt = Date(timeIntervalSince1970: 1_700_000_000)
-        model.clashSummary = "1.19.8 · 模式：rule · 当前：自动选择 · 42 ms"
+        model.clashSummary = "1.19.8 · 当前：自动选择 · 42 ms"
+        model.clashMode = "rule"
         model.loginAtLaunch = true
         model.loginAvailable = false
         model.loginStatusText = "登录启动不可用（当前构建未签名）"

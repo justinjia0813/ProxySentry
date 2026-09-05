@@ -47,6 +47,9 @@ struct NetworkSnapshot: Equatable, Sendable {
     /// The proxy outcomes came through the configured macOS proxy route, rather
     /// than from a standalone Clash node health check.
     var proxyExitVerifiedThroughSystemRoute = false
+    /// The proxy outcomes came through Clash's loopback mixed port. This is used
+    /// only when PAC/auto-discovery hides the concrete macOS proxy endpoint.
+    var proxyExitVerifiedThroughClashRoute = false
     var localProxyPortReachable = false
     var clashVersionOutcome: ProbeOutcome?
     var clashConfigsOutcome: ProbeOutcome?
@@ -111,6 +114,7 @@ struct DiagnosisState: Equatable, Sendable {
     // Node conclusions (kind red).
     static let redCurrentNode = DiagnosisState(kind: .red, symbolName: "xmark.shield.fill", title: "当前代理节点异常", missingEvidenceExplanation: "当前节点失败但同机场备选节点正常。")
     static let redAirport = DiagnosisState(kind: .red, symbolName: "xmark.shield.fill", title: "疑似机场侧故障", missingEvidenceExplanation: "当前与备选节点均失败且直连和本地 Clash 正常。")
+    static let redEntryDial = DiagnosisState(kind: .red, symbolName: "xmark.shield.fill", title: "节点假绿：疑似入口拨号失败", missingEvidenceExplanation: "节点延迟正常，但经 Clash 的两个真实外站探测均失败；可能是入口域名解析到失效地址。建议运行外部入口诊断脚本或联系机场；ProxySentry 未修改配置。")
 
     /// Short user-visible summary. Sanitized by construction.
     var summary: String {
@@ -145,6 +149,10 @@ enum DiagnosisClassifier {
         let hasProxyRoute = s.systemProxyConfigured || s.tunEnabled
         let directOK = s.directOutcomes.contains(.success)
         let publicOK = s.publicIPOutcomes.contains(.success)
+        let proxyAllDown = s.proxyOutcomes.count >= 2
+            && s.proxyOutcomes.allSatisfy { $0 == .failure || $0 == .timeout }
+        let verifiedProxyRoute = (s.proxyExitVerifiedThroughSystemRoute && !s.pacConfigured)
+            || s.proxyExitVerifiedThroughClashRoute
 
         // 1. Green first: a verified, working proxy exit is the strongest signal.
         if hasProxyRoute,
@@ -157,6 +165,7 @@ enum DiagnosisClassifier {
         //     Clash while the node and kernel are healthy. traffic=false/nil is
         //     never treated as a failure (it simply doesn't reach this branch).
         if s.clashTrafficObserved == true,
+           !(verifiedProxyRoute && proxyAllDown),
            s.clashActiveProxyOutcome == .success,
            s.clashVersionOutcome == .success,
            s.clashConfigsOutcome == .success,
@@ -221,6 +230,23 @@ enum DiagnosisClassifier {
             return grayState("虚拟网卡启用，无法独立判断直连。")
         }
 
+        // The node delay API and a real request through Clash answer different
+        // questions. A healthy delay with two failed real targets is a false
+        // green: suspect entry-domain resolution/dialing, not local proxy setup.
+        if hasProxyRoute,
+           directOK,
+           s.localProxyEndpointConfigured,
+           s.localProxyPortReachable,
+           s.clashPortsMatchConfiguredProxy,
+           s.clashVersionOutcome == .success,
+           s.clashConfigsOutcome == .success,
+           s.clashInfoAvailable,
+           verifiedProxyRoute,
+           s.clashActiveProxyOutcome == .success,
+           proxyAllDown {
+            return .redEntryDial
+        }
+
         // 7. Yellow: base network works but the configured local proxy is
         //    unreachable or local Clash/port mismatch.
         if hasProxyRoute, directOK, s.localProxyEndpointConfigured {
@@ -248,11 +274,9 @@ enum DiagnosisClassifier {
            s.clashVersionOutcome == .success,
            s.clashConfigsOutcome == .success,
            s.clashInfoAvailable,
-           !s.pacConfigured,
-           s.proxyExitVerifiedThroughSystemRoute,
+           verifiedProxyRoute,
            s.clashActiveProxyOutcome == .failure || s.clashActiveProxyOutcome == .timeout,
-           s.proxyOutcomes.count >= 2,
-           s.proxyOutcomes.allSatisfy({ $0 == .failure || $0 == .timeout }) {
+           proxyAllDown {
             return .red
         }
 

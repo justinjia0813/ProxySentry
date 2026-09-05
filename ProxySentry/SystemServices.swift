@@ -179,6 +179,21 @@ enum SystemServices {
     ) throws -> Data {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let nodeDelay = evidence.first(where: { $0.category == .node })
+            .map { outcomeCode($0.outcome) } ?? "unknown"
+        let realTrafficEvidence = evidence.filter { $0.category == .proxy }
+        let realTraffic: String
+        if realTrafficEvidence.contains(where: { $0.outcome == .success }) {
+            realTraffic = "reachable"
+        } else if realTrafficEvidence.count >= 2,
+                  realTrafficEvidence.allSatisfy({ $0.outcome == .failure || $0.outcome == .timeout }) {
+            realTraffic = "unreachable"
+        } else {
+            realTraffic = "unknown"
+        }
+        let entryAssessment = state == .redEntryDial
+            ? "suspected_dial_failure"
+            : (nodeDelay == "success" && realTraffic == "reachable" ? "no_conflict" : "not_assessed")
         let object: [String: Any] = [
             "schemaVersion": 1,
             "checkedAt": formatter.string(from: checkedAt),
@@ -188,6 +203,17 @@ enum SystemServices {
                 "state": stateCode(state.kind),
                 "title": state.title,
                 "summary": state.summary,
+            ],
+            "proxy": [
+                "entry": [
+                    "assessment": entryAssessment,
+                    "nodeDelay": nodeDelay,
+                    "realTraffic": realTraffic,
+                    "recommendedAction": state == .redEntryDial
+                        ? "run_external_entry_diagnostics_or_contact_provider"
+                        : "none",
+                    "readOnly": true,
+                ],
             ],
             "evidence": evidence.map {
                 [

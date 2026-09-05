@@ -61,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timerTask: Task<Void, Never>?
     private var sustainedFaultRevealPolicy = SustainedFaultRevealPolicy()
     private var lastAgentStatusDate: Date?
+    private let watchdog = WatchdogController()
+    private var watchdogWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard NSClassFromString("XCTestCase") == nil else { return }
@@ -72,9 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = DiagnosticsController(
             sleep: { try await Task.sleep(for: $0) },
             round: {
-                await DiagnosticsController.makeRound(
+                let proxy = SystemNetwork.currentProxies()
+                return await DiagnosticsController.makeRound(
                     pathSnapshot: { pathObserver.current },
-                    proxySnapshot: { SystemNetwork.currentProxies() },
+                    proxySnapshot: { proxy },
                     dnsResolves: { await NetworkProbes.systemResolver($0) },
                     runDirect: { await NetworkProbes.runDirectProbes() },
                     runLocal: { proxy in
@@ -88,7 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         return await NetworkProbes.localPortProbe(host: proxy.host, port: port)
                     },
                     runProxy: { await NetworkProbes.runProxyProbes(via: $0) },
-                    readClash: { await Self.readClash(fixedProxy: $0) },
+                    readClash: {
+                        await Self.readClash(
+                            fixedProxy: $0,
+                            probeMixedPort: proxy.pacConfigured || proxy.autoDiscovery
+                        )
+                    },
                     gatewayProbe: {
                         await NetworkProbes.gatewayProbe(gateway: SystemNetwork.defaultGateway()) {
                             await NetworkProbes.pingGateway($0)
@@ -110,6 +118,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         configurePanel()
         configureLoginItem()
+        watchdog.onChange = { [weak self] in
+            guard let self else { return }
+            self.model.watchdogSummary = self.watchdog.enabled ? self.watchdog.status : "未启用"
+        }
+        model.watchdogSummary = watchdog.enabled ? watchdog.status : "未启用"
+        watchdog.recoverPendingTransaction()
 
         controller.start()
         pathObserver.start()
@@ -133,6 +147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController?.stop()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard watchdog.busy else { return .terminateNow }
+        controller?.stop()
+        watchdog.stop { sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
+    }
+
     func applicationDidResignActive(_ notification: Notification) {
         panelController?.collapse()
     }
@@ -146,7 +167,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onLoginChanged: { [weak self] in self?.setLoginAtLaunch($0) },
             onOpenLoginSettings: { SMAppService.openSystemSettingsLoginItems() },
             onPresentationChanged: { [weak self] in self?.panelController?.setExpanded($0) },
-            onQuit: { NSApplication.shared.terminate(nil) }
+            onQuit: { NSApplication.shared.terminate(nil) },
+            onOpenWatchdog: { [weak self] in self?.openWatchdogSettings() }
         ))
         let panelController = NotchPanelController(model: model, contentViewController: content)
         self.panelController = panelController
@@ -155,12 +177,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshFromController() {
         guard let controller else { return }
+        watchdog.refreshStatus()
         let committedState = controller.committedState
         model.state = committedState ?? .gray
         model.isChecking = controller.isChecking
         model.lastCheckedAt = controller.lastCheckedAt
         model.evidence = controller.evidence
         model.clashSummary = Self.clashText(controller.clashSummary)
+        model.clashMode = controller.clashSummary?.mode
         if let committedState,
            let checkedAt = controller.lastCheckedAt,
            controller.pendingCandidate == nil,
@@ -173,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     checkedAt: checkedAt
                 )
                 lastAgentStatusDate = checkedAt
+                watchdog.consume(kind: committedState.kind, checkedAt: checkedAt)
             } catch {
                 model.notice = "Agent 状态写入失败"
             }
@@ -207,6 +232,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         model.notice = "诊断摘要已复制"
+    }
+
+    private func openWatchdogSettings() {
+        if watchdogWindow == nil {
+            let window = NSWindow(contentViewController: NSHostingController(rootView: WatchdogSettingsView(watchdog: watchdog)))
+            window.title = "ProxySentry · 入口自愈"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            watchdogWindow = window
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        watchdogWindow?.makeKeyAndOrderFront(nil)
     }
 
     private func openClash() {
@@ -308,7 +346,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Clash read-only enhancement
 
-    private nonisolated static func readClash(fixedProxy: FixedProxy?) async -> DiagnosticsController.ClashRead {
+    private nonisolated static func readClash(
+        fixedProxy: FixedProxy?,
+        probeMixedPort: Bool
+    ) async -> DiagnosticsController.ClashRead {
         guard let socketPath = ClashReader.socketCandidatePaths().first(where: {
             ClashReader.validateSocketCandidate(path: $0)
         }) else {
@@ -333,6 +374,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if case .success(let value) = configsRead { configs = value } else { configs = nil }
         let selection: ClashReader.ClashProxySelection?
         if case .success(let value) = proxiesRead { selection = value } else { selection = nil }
+
+        async let mixedPortRead: (NetworkProbes.ProbeOutput?, [NetworkProbes.ProbeOutput]) = {
+            guard probeMixedPort, fixedProxy == nil,
+                  let mixedPort = configs?.mixedPort,
+                  let port = UInt16(exactly: mixedPort) else { return (nil, []) }
+            let endpoint = FixedProxy(host: "127.0.0.1", port: mixedPort)
+            async let local = NetworkProbes.localPortProbe(host: endpoint.host, port: port)
+            async let proxy = NetworkProbes.runProxyProbes(via: endpoint)
+            return await (local, proxy)
+        }()
 
         let delayResult: Result<Int, ClashReader.ReadError>?
         if configs?.mode == "global", let selected = selection?.selected,
@@ -383,6 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             alternateNodeProbes = []
         }
+        let mixedPort = await mixedPortRead
 
         let available = version != nil && configs != nil
         let trafficObserved: Bool?
@@ -403,6 +455,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 delay: activeProxyProbe?.outcome == .success ? activeProxyProbe?.milliseconds : nil
             ),
             activeProxyProbe: activeProxyProbe,
+            mixedPortProbe: mixedPort.0,
+            mixedPortProxyProbes: mixedPort.1,
             tunEnabled: configs?.tunEnabled == true,
             trafficObserved: trafficObserved,
             alternateNodeProbes: alternateNodeProbes
@@ -433,7 +487,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let summary else { return nil }
         var parts: [String] = []
         if let version = summary.version { parts.append(version) }
-        if let mode = summary.mode { parts.append("模式：\(mode)") }
         if let selected = summary.selectedGroup { parts.append("当前：\(selected)") }
         if let delay = summary.delay { parts.append("\(delay) ms") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

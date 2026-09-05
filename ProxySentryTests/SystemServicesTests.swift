@@ -201,4 +201,32 @@ final class SystemServicesTests: XCTestCase {
         )
         XCTAssertEqual(directoryPermissions.intValue & 0o777, 0o700)
     }
+
+    func testAgentStatusReportsSuspectedEntryDialFailureWithoutSensitiveDetails() throws {
+        let evidence = [
+            ProbeEvidence(category: .node, outcome: .success, milliseconds: 94, userVisibleDescription: "当前代理节点可用"),
+            ProbeEvidence(category: .proxy, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "代理出口检测超时"),
+            ProbeEvidence(category: .proxy, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "代理出口检测超时"),
+        ]
+
+        let data = try SystemServices.agentStatusJSON(
+            state: .redEntryDial,
+            evidence: evidence,
+            checkedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let proxy = try XCTUnwrap(root["proxy"] as? [String: Any])
+        let entry = try XCTUnwrap(proxy["entry"] as? [String: Any])
+
+        XCTAssertEqual(entry["assessment"] as? String, "suspected_dial_failure")
+        XCTAssertEqual(entry["nodeDelay"] as? String, "success")
+        XCTAssertEqual(entry["realTraffic"] as? String, "unreachable")
+        XCTAssertEqual(
+            entry["recommendedAction"] as? String,
+            "run_external_entry_diagnostics_or_contact_provider"
+        )
+        XCTAssertEqual(entry["readOnly"] as? Bool, true)
+        XCTAssertNil(entry["host"])
+        XCTAssertNil(entry["ip"])
+    }
 }

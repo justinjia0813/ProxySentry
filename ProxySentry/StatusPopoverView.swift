@@ -6,12 +6,23 @@ final class ProxySentryViewModel: ObservableObject {
     @Published var isChecking = false
     @Published var lastCheckedAt: Date?
     @Published var clashSummary: String?
+    @Published var clashMode: String?
     @Published var evidence: [ProbeEvidence] = []
     @Published var loginAtLaunch = true
     @Published var loginAvailable = false
     @Published var loginStatusText = "登录启动不可用"
     @Published var notice: String?
     @Published var isExpanded = false
+    @Published var watchdogSummary = "未启用"
+
+    var clashModeText: String {
+        switch clashMode {
+        case "rule": return "规则模式"
+        case "global": return "全局模式"
+        case "direct": return "直连模式"
+        default: return "模式未知"
+        }
+    }
 }
 
 struct StatusPopoverView: View {
@@ -23,6 +34,7 @@ struct StatusPopoverView: View {
     let onOpenLoginSettings: () -> Void
     let onPresentationChanged: (Bool) -> Void
     let onQuit: () -> Void
+    var onOpenWatchdog: () -> Void = {}
 
     private let terminalBackground = Color(red: 0.035, green: 0.04, blue: 0.05)
     private let terminalSurface = Color(red: 0.07, green: 0.08, blue: 0.095)
@@ -107,11 +119,23 @@ struct StatusPopoverView: View {
                             .foregroundStyle(model.state.tint)
                     }
                     Spacer(minLength: 4)
-                    Text(checkTimeText)
-                        .font(.system(size: 9, design: .monospaced).monospacedDigit())
-                        .foregroundStyle(terminalMuted)
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(2)
+                    VStack(alignment: .trailing, spacing: 5) {
+                        Text(model.clashModeText)
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(terminalText)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(terminalSurface, in: RoundedRectangle(cornerRadius: 3))
+                            .fixedSize()
+                            .accessibilityLabel("Clash 运行模式")
+                            .accessibilityValue(model.clashModeText)
+                            .help("来自最近一次已确认检测中的 Clash 配置；运行模式与网络健康状态相互独立。")
+                        Text(checkTimeText)
+                            .font(.system(size: 9, design: .monospaced).monospacedDigit())
+                            .foregroundStyle(terminalMuted)
+                            .multilineTextAlignment(.trailing)
+                            .lineLimit(2)
+                    }
                 }
 
                 terminalField(label: "CLASH", value: model.clashSummary ?? "详情不可用")
@@ -194,6 +218,8 @@ struct StatusPopoverView: View {
                 if model.loginStatusText.contains("批准") {
                     terminalButton("打开登录项设置", systemImage: "gear", action: onOpenLoginSettings)
                 }
+
+                terminalButton("入口自愈：\(model.watchdogSummary)", systemImage: "wrench.and.screwdriver", action: onOpenWatchdog)
 
                 HStack(spacing: 7) {
                     terminalButton("收起", systemImage: "chevron.up", action: { onPresentationChanged(false) })
@@ -304,9 +330,13 @@ struct StatusPopoverView: View {
 
     private var failedEvidence: [ProbeEvidence] {
         var seen = Set<String>()
+        let proxyHasSuccess = model.evidence.contains {
+            $0.category == .proxy && $0.outcome == .success
+        }
         return model.evidence.filter {
             $0.outcome != .success
                 && $0.outcome != .unavailable
+                && !($0.category == .proxy && proxyHasSuccess)
                 && (baseNetworkFailed
                     ? [.direct, .gateway, .publicIP].contains($0.category)
                     : $0.category != .gateway && $0.category != .publicIP)
@@ -319,6 +349,7 @@ struct StatusPopoverView: View {
     }
 
     private var routeRows: [RouteRow] {
+        let hasRealTrafficEvidence = model.evidence.contains { $0.category == .proxy }
         return [
             routeRow(
                 id: "base",
@@ -329,7 +360,7 @@ struct StatusPopoverView: View {
             baseNetworkFailed ? blockedRouteRow(id: "traffic", name: "traffic") : routeRow(
                 id: "traffic",
                 name: "traffic",
-                categories: [.clashTraffic],
+                categories: hasRealTrafficEvidence ? [.proxy] : [.clashTraffic],
                 successLabel: "ACTIVE"
             ),
             baseNetworkFailed
@@ -377,7 +408,10 @@ struct StatusPopoverView: View {
         } else {
             outcome = nil
         }
-        let latency = items.map(\.milliseconds).filter { $0 > 0 }.max().map { "\($0) ms" } ?? "—"
+        let latencyItems = outcome == .success
+            ? items.filter { $0.outcome == .success }
+            : items
+        let latency = latencyItems.map(\.milliseconds).filter { $0 > 0 }.max().map { "\($0) ms" } ?? "—"
         return RouteRow(
             id: id,
             name: name,
@@ -438,12 +472,13 @@ private extension DiagnosisState {
     }
 
     var terminalLabel: String {
+        if self == .redEntryDial { return "ENTRY DIAL SUSPECT" }
         switch kind {
-        case .green: "PROXY PASS"
-        case .blue: "DIRECT PASS"
-        case .yellow: "LOCAL PROXY CONFIG"
-        case .red: "UPSTREAM FAILURE"
-        case .gray: self == .grayLocalNetwork || self == .grayExternal ? "BASE FAILURE" : "UNKNOWN"
+        case .green: return "PROXY PASS"
+        case .blue: return "DIRECT PASS"
+        case .yellow: return "LOCAL PROXY CONFIG"
+        case .red: return "UPSTREAM FAILURE"
+        case .gray: return self == .grayLocalNetwork || self == .grayExternal ? "BASE FAILURE" : "UNKNOWN"
         }
     }
 
@@ -462,12 +497,13 @@ private extension DiagnosisState {
     }
 
     var compactLabel: String {
+        if self == .redEntryDial { return "ENTRY" }
         switch kind {
-        case .green: "PROXY"
-        case .blue: "DIRECT"
-        case .yellow: "LOCAL"
-        case .red: "UPSTREAM"
-        case .gray: self == .grayLocalNetwork || self == .grayExternal ? "BASE" : "UNKNOWN"
+        case .green: return "PROXY"
+        case .blue: return "DIRECT"
+        case .yellow: return "LOCAL"
+        case .red: return "UPSTREAM"
+        case .gray: return self == .grayLocalNetwork || self == .grayExternal ? "BASE" : "UNKNOWN"
         }
     }
 }

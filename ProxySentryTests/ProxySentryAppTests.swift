@@ -4,6 +4,82 @@ import XCTest
 
 @MainActor
 final class ProxySentryAppTests: XCTestCase {
+    func testClashModeLabelsUseReportedModeNotNetworkHealth() {
+        let model = ProxySentryViewModel()
+        for (raw, label): (String?, String) in [
+            ("rule", "规则模式"), ("global", "全局模式"), ("direct", "直连模式"),
+            (nil, "模式未知"), ("unexpected", "模式未知")
+        ] {
+            model.clashMode = raw
+            for state in [DiagnosisState.green, .blue, .red, .gray] {
+                model.state = state
+                XCTAssertEqual(model.clashModeText, label)
+            }
+        }
+    }
+
+    func testWatchdogStoppingTwicePreservesQuitCompletion() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let watchdog = WatchdogController(home: home)
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["2"]
+        watchdog.start(child, checkOnly: true)
+        XCTAssertTrue(watchdog.busy)
+        var completed = false
+        watchdog.stop { completed = true }
+        watchdog.stop()
+        for _ in 0..<300 where watchdog.busy { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(watchdog.busy)
+        XCTAssertTrue(completed)
+    }
+
+    func testWatchdogDoesNotReusePreviousRepairStatusForNewProcess() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let watchdog = WatchdogController(home: home)
+        try watchdog.saveSettings(enabled: false, domain: "")
+        let formatter = ISO8601DateFormatter()
+        let data = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1, "state": "repaired", "checkedAt": formatter.string(from: Date().addingTimeInterval(-30)),
+            "expiresAt": formatter.string(from: Date().addingTimeInterval(270))
+        ])
+        try data.write(to: watchdog.settingsURL.deletingLastPathComponent().appendingPathComponent("watchdog-status.json"))
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        watchdog.start(child, checkOnly: true)
+        for _ in 0..<100 where watchdog.busy { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(watchdog.status, "辅助进程未返回本轮状态")
+    }
+
+    func testWatchdogDefaultsOffAndPersistsOnlyExplicitChoice() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let watchdog = WatchdogController(home: home)
+        XCTAssertFalse(watchdog.enabled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: watchdog.settingsURL.path))
+        try watchdog.saveSettings(enabled: true, domain: "entry.example.com")
+        XCTAssertTrue(WatchdogController(home: home).enabled)
+        XCTAssertEqual(WatchdogController(home: home).entryDomain, "entry.example.com")
+        XCTAssertThrowsError(try watchdog.saveSettings(enabled: true, domain: "https://bad.example/path"))
+        try watchdog.saveSettings(enabled: false, domain: "")
+        XCTAssertFalse(WatchdogController(home: home).enabled)
+        let permissions = try FileManager.default.attributesOfItem(atPath: watchdog.settingsURL.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(permissions?.intValue, 0o600)
+    }
+
+    func testWatchdogOnlyConsumesFreshConfirmedRedAndNeverInheritsEnvironment() {
+        let now = Date()
+        XCTAssertTrue(WatchdogController.shouldAttempt(enabled: true, kind: .red, checkedAt: now, now: now))
+        XCTAssertFalse(WatchdogController.shouldAttempt(enabled: false, kind: .red, checkedAt: now, now: now))
+        XCTAssertFalse(WatchdogController.shouldAttempt(enabled: true, kind: .green, checkedAt: now, now: now))
+        XCTAssertFalse(WatchdogController.shouldAttempt(enabled: true, kind: .red, checkedAt: now.addingTimeInterval(-121), now: now))
+        XCTAssertFalse(WatchdogController.shouldAttempt(enabled: true, kind: .red, checkedAt: now.addingTimeInterval(1), now: now))
+        XCTAssertEqual(Set(WatchdogController.cleanEnvironment(home: URL(fileURLWithPath: "/tmp/test")).keys), ["HOME", "PATH", "LANG"])
+        XCTAssertEqual(WatchdogController.statusText(for: "secret arbitrary error"), "状态不可用")
+    }
+
     func testPanelRevealsOnceOnlyAfterThreeMinutesOfContinuousFault() {
         var policy = SustainedFaultRevealPolicy()
 
