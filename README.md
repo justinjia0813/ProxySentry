@@ -4,12 +4,12 @@
 
 ProxySentry 是一款轻量的 macOS 网络诊断工具。它把基础网络、代理流量、当前节点和 Clash 内核拆成四层证据，并把结果收纳在刘海或屏幕顶部。诊断主进程只读；2.2 新增默认关闭、需明确启用的独立入口自愈辅助进程。
 
-[下载 2.2 未签名预览版](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.0) · [查看全部版本](https://github.com/justinjia0813/ProxySentry/releases) · [报告问题](https://github.com/justinjia0813/ProxySentry/issues)
+[下载 2.2 未签名预览版](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.1) · [查看全部版本](https://github.com/justinjia0813/ProxySentry/releases) · [报告问题](https://github.com/justinjia0813/ProxySentry/issues)
 
 ![ProxySentry 终端风格诊断面板（2.0 示意图）](docs/assets/proxysentry-2.0.png)
 
 > [!IMPORTANT]
-> GitHub 上提供的是 2.2.0 未签名预览包。它没有 Developer ID（Developer Identifier，开发者标识；Apple 用来识别独立开发者签名身份）签名，也没有通过 Apple 公证，macOS Gatekeeper 会拦截它。现阶段适合开发测试，不是面向普通用户的免提示安装包。
+> GitHub 上提供的是 2.2.1 未签名预览包。它没有 Developer ID（Developer Identifier，开发者标识；Apple 用来识别独立开发者签名身份）签名，也没有通过 Apple 公证，macOS Gatekeeper 会拦截它。现阶段适合开发测试，不是面向普通用户的免提示安装包。
 
 ## 功能
 
@@ -31,7 +31,7 @@ ProxySentry 是一款轻量的 macOS 网络诊断工具。它把基础网络、�
 
 下载当前预览版：
 
-1. 打开 [ProxySentry 2.2.0 Preview](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.0)。
+1. 打开 [ProxySentry 2.2.1 Preview](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.1)。
 2. 在 **Assets** 中下载 macOS 通用构建，而不是 GitHub 自动生成的源码压缩包。
 3. 解压，将 `ProxySentry.app` 拖入“应用程序”，然后打开。
 
@@ -131,7 +131,7 @@ xcodebuild -project ProxySentry.xcodeproj -scheme ProxySentry -configuration Deb
 | 项目 | 状态 |
 | --- | --- |
 | 2.2 源码与通用构建 | 通过发布工作流测试与打包 |
-| GitHub Release 下载入口 | `preview-v2.2.0` 未签名预览版 |
+| GitHub Release 下载入口 | `preview-v2.2.1` 未签名预览版 |
 | Developer ID 签名 | 未完成；本机没有可用签名身份 |
 | Apple 公证与票据装订 | 未完成 |
 | Gatekeeper 验证 | 当前公开包会被拒绝 |
