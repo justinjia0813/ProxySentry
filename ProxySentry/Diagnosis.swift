@@ -31,7 +31,7 @@ struct ProbeEvidence: Equatable, Sendable {
     let userVisibleDescription: String
 }
 
-/// The finite inputs of one classification round. Booleans and outcomes only;
+/// The finite inputs of one classification round. Flags, outcomes and whitelisted mode;
 /// no addresses, keys, or raw Clash data.
 struct NetworkSnapshot: Equatable, Sendable {
     var systemProxyConfigured = false
@@ -56,6 +56,7 @@ struct NetworkSnapshot: Equatable, Sendable {
     /// Configured system proxy port matches a reachable Clash listening port.
     var clashPortsMatchConfiguredProxy = false
     var clashInfoAvailable = false
+    var clashMode: String?
     var pacConfigured = false
     var proxyAutoDiscovery = false
     var unrelatedLocalPortsListening = false
@@ -96,6 +97,7 @@ struct DiagnosisState: Equatable, Sendable {
     let missingEvidenceExplanation: String
 
     static let green = DiagnosisState(kind: .green, symbolName: "checkmark.shield.fill", title: "代理工作正常", missingEvidenceExplanation: "")
+    static let greenClashExit = DiagnosisState(kind: .green, symbolName: "checkmark.shield.fill", title: "Clash 代理出口正常", missingEvidenceExplanation: "已验证 Clash 出口，系统自动代理规则尚未验证。")
     /// Independent green: telemetry confirms Clash is actually carrying proxy
     /// traffic while the node and kernel are healthy.
     static let greenTrafficActive = DiagnosisState(kind: .green, symbolName: "checkmark.shield.fill", title: "Clash 正在承载代理流量", missingEvidenceExplanation: "")
@@ -119,7 +121,7 @@ struct DiagnosisState: Equatable, Sendable {
     /// Short user-visible summary. Sanitized by construction.
     var summary: String {
         switch kind {
-        case .green: return "代理出口工作正常。"
+        case .green: return missingEvidenceExplanation.isEmpty ? "代理出口工作正常。" : missingEvidenceExplanation
         case .blue:
             return missingEvidenceExplanation.isEmpty
                 ? "未使用代理，直连工作正常。"
@@ -159,6 +161,15 @@ enum DiagnosisClassifier {
            s.proxyExitVerifiedThroughSystemRoute,
            s.proxyOutcomes.contains(.success) {
             return .green
+        }
+
+        // A real request through Clash also verifies its exit in rule mode.
+        // Keep the unresolved macOS automatic route explicit in the result.
+        if hasProxyRoute,
+           s.proxyExitVerifiedThroughClashRoute,
+           s.clashMode == "rule" || s.clashMode == "global",
+           s.proxyOutcomes.contains(.success) {
+            return .greenClashExit
         }
 
         // 1b. Independent green: telemetry observed non-direct traffic through

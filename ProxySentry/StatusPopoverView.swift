@@ -13,7 +13,6 @@ final class ProxySentryViewModel: ObservableObject {
     @Published var loginStatusText = "登录启动不可用"
     @Published var notice: String?
     @Published var isExpanded = false
-    @Published var watchdogSummary = "未启用"
 
     var clashModeText: String {
         switch clashMode {
@@ -34,7 +33,6 @@ struct StatusPopoverView: View {
     let onOpenLoginSettings: () -> Void
     let onPresentationChanged: (Bool) -> Void
     let onQuit: () -> Void
-    var onOpenWatchdog: () -> Void = {}
 
     private let terminalBackground = Color(red: 0.035, green: 0.04, blue: 0.05)
     private let terminalSurface = Color(red: 0.07, green: 0.08, blue: 0.095)
@@ -219,8 +217,6 @@ struct StatusPopoverView: View {
                     terminalButton("打开登录项设置", systemImage: "gear", action: onOpenLoginSettings)
                 }
 
-                terminalButton("入口自愈：\(model.watchdogSummary)", systemImage: "wrench.and.screwdriver", action: onOpenWatchdog)
-
                 HStack(spacing: 7) {
                     terminalButton("收起", systemImage: "chevron.up", action: { onPresentationChanged(false) })
                     terminalButton("退出 ProxySentry", systemImage: "power", action: onQuit)
@@ -365,7 +361,7 @@ struct StatusPopoverView: View {
             ),
             baseNetworkFailed
                 ? blockedRouteRow(id: "proxy", name: "proxy")
-                : routeRow(id: "proxy", name: "proxy", categories: [.node]),
+                : routeRow(id: "proxy", name: "proxy", categories: model.clashMode == "rule" ? [.proxy] : [.node]),
             routeRow(
                 id: "clash",
                 name: "clash",

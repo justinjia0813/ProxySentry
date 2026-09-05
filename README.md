@@ -2,14 +2,14 @@
 
 一眼判断“网络不好”到底坏在哪一层。
 
-ProxySentry 是一款轻量的 macOS 网络诊断工具。它把基础网络、代理流量、当前节点和 Clash 内核拆成四层证据，并把结果收纳在刘海或屏幕顶部。诊断主进程只读；2.2 新增默认关闭、需明确启用的独立入口自愈辅助进程。
+ProxySentry 是一款轻量的 macOS 网络诊断工具。它把基础网络、代理流量、当前节点和 Clash 内核拆成四层证据，并把结果收纳在刘海或屏幕顶部。网络诊断保持只读。
 
-[下载 2.2 未签名预览版](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.1) · [查看全部版本](https://github.com/justinjia0813/ProxySentry/releases) · [报告问题](https://github.com/justinjia0813/ProxySentry/issues)
+[下载 2.2.2 未签名预览版](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.2) · [查看全部版本](https://github.com/justinjia0813/ProxySentry/releases) · [报告问题](https://github.com/justinjia0813/ProxySentry/issues)
 
 ![ProxySentry 终端风格诊断面板（2.0 示意图）](docs/assets/proxysentry-2.0.png)
 
 > [!IMPORTANT]
-> GitHub 上提供的是 2.2.1 未签名预览包。它没有 Developer ID（Developer Identifier，开发者标识；Apple 用来识别独立开发者签名身份）签名，也没有通过 Apple 公证，macOS Gatekeeper 会拦截它。现阶段适合开发测试，不是面向普通用户的免提示安装包。
+> GitHub 上提供的是 2.2.2 未签名预览包。它没有 Developer ID（Developer Identifier，开发者标识；Apple 用来识别独立开发者签名身份）签名，也没有通过 Apple 公证，macOS Gatekeeper 会拦截它。现阶段适合开发测试，不是面向普通用户的免提示安装包。
 
 ## 功能
 
@@ -18,6 +18,7 @@ ProxySentry 是一款轻量的 macOS 网络诊断工具。它把基础网络、�
 - 网络变化只在后台复检，不因短暂波动打断用户；异常连续至少 3 分钟才主动提示一次，恢复后才允许再次提醒。
 - 使用终端风格的高对比界面，同时适配深色、浅色、多屏、全屏 Space、长文本和 VoiceOver。
 - 只使用公开 AppKit 接口，不申请辅助功能权限，不使用 macOS 私有窗口接口。
+- 规则模式的 `proxy` 行显示真实代理出口探测；全局模式显示所选节点测速。经 Clash 出口探测成功时显示绿色，系统自动代理规则是否生效仍单独说明。
 - 基础网络失败时明确显示 `BASE FAILURE`，代理流量和节点检测标记为 `BLOCKED`，不把下游超时误判为机场故障。
 - 每轮确认诊断会生成仅当前用户可读的脱敏状态文件，供本机或远程 Agent 查询。
 
@@ -25,13 +26,12 @@ ProxySentry 是一款轻量的 macOS 网络诊断工具。它把基础网络、�
 
 - 展开面板右上角独立显示 Clash 的规则、全局或直连模式；随已确认检测刷新，读取不到时显示“模式未知”，不与网络健康状态混淆。
 - 节点延迟正常但经 Clash 的真实外站流量连续失败时，提示“节点假绿：疑似入口拨号失败”；旧流量计数不覆盖本轮真实失败。
-- 独立入口自愈默认关闭，在诊断面板“入口自愈”设置中明确启用。
 
 ## 下载与安装
 
 下载当前预览版：
 
-1. 打开 [ProxySentry 2.2.1 Preview](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.1)。
+1. 打开 [ProxySentry 2.2.2 Preview](https://github.com/justinjia0813/ProxySentry/releases/tag/preview-v2.2.2)。
 2. 在 **Assets** 中下载 macOS 通用构建，而不是 GitHub 自动生成的源码压缩包。
 3. 解压，将 `ProxySentry.app` 拖入“应用程序”，然后打开。
 
@@ -45,7 +45,7 @@ ProxySentry 是一款轻量的 macOS 网络诊断工具。它把基础网络、�
 | --- | --- | --- |
 | `base` | 网卡、默认网关和直连公网是否正常？ | 证据仍不足或检测尚未完成。 |
 | `traffic` | 真实外站请求能否通过代理出口完成？缺少真实探测时回退到聚合流量观察。 | 暂时没有足够证据，不等于失败。 |
-| `proxy` | 当前代理节点能否连通，延迟如何？ | 暂时无法形成可靠结论。 |
+| `proxy` | 规则模式下真实代理出口是否可达；全局模式下所选节点能否连通，延迟如何？ | 暂时无法形成可靠结论。 |
 | `clash` | Clash Verge Rev 的 Mihomo 内核和本地接口是否可用？ | 内核状态尚未确认。 |
 
 状态颜色保持一致：绿色正常，橙色需要关注，红色故障，灰色未知。面板同时保留异常摘要，避免只有颜色没有原因。
@@ -64,40 +64,16 @@ ProxySentry 每轮确认诊断后，会把同一份脱敏证据原子写入 Java
 
 ## 常见问题：手机能用，电脑上的 Clash 却全节点超时
 
-这不一定是节点本身停机。若面板同时显示 `proxy PASS` 与 `traffic TIMEOUT`，代表 Clash 的节点延迟探测成功，但两个真实外站请求都无法经 Clash 出口完成；可能是机场入口解析命中了失效地址。诊断只报告“疑似”，不把超时等同于已证实被墙；默认不修改配置。
-
-## 可选入口自愈（默认关闭）
-
-打开诊断面板 → 入口自愈 → 检查运行条件。需要自愈时再启用并确认提示。如果运行配置和订阅都已经固定为地址，需要填写原始入口域名。
-
-- 仅支持 Clash Verge Rev 全局模式中直接选中的 VLESS REALITY 节点；不支持嵌套策略组、其他协议、自定义配置目录或开启虚拟网卡的场景。不满足条件就停止，不猜测目标节点。
-- 主进程只向独立辅助进程提供已确认且未过期的红色诊断。辅助进程复核基础网络、本地端口、内核和两个真实外站失败；单次抖动不触发，每 180 秒最多尝试一次，同一诊断不重放。
-- 从阿里、腾讯的公共解析器及 Google、Cloudflare 的加密解析服务取候选地址，在隔离的临时内核中核对节点延迟和两个真实外站请求。全部通过才备份并仅修改当前节点的入口地址，重载后再次验证真实流量。
-- 写入前重新核对当前节点、当前订阅、配置内容和启用状态；失败或停止时回滚。发现外部修改时不覆盖，保留备份并报告需要人工处理。异常退出留下的事务会在下次已启用的辅助进程启动时尝试安全恢复。
-- 检测到 `com.justinjia.clash-watchdog.plist` 或旧锁文件时拒绝接管。请先手动停用旧看门狗并将其登录项移出 `~/Library/LaunchAgents/`；本工具不会替你停用或删除旧脚本。
-- 关闭自愈或退出应用后不再启动修复；正在执行的事务先安全收尾。没有新增后台登录项或常驻服务，也不会切换节点、更改系统代理。
-
-辅助进程使用系统 `/usr/bin/ruby`、`/usr/bin/dig`（可选的直连解析）和已安装的 Clash 内核，不安装第三方依赖。单次尝试预算 90 秒，随后可能需要有限时间回滚。配置格式不支持、候选均失败、基础网络不可独立判断时只报告，不写配置。
-
-`~/Library/Application Support/ProxySentry/` 下新增：
-
-- `watchdog-settings.json`：启用状态和可选原始域名。
-- `watchdog-status.json`：脱敏状态码及有效期，远程 Agent 可只读查询；过期状态不能当作当前结果。
-- `watchdog-attempt.json`、`watchdog.lock`：防重放、冷却和单实例控制。
-- `watchdog-backups/`、`watchdog-journal.json`：私有备份和未完成事务。**备份包含原配置中的节点凭据，不应上传、提交或分享。** 自动恢复失败时保留记录，不自动覆盖外部修改；备份不自动清理，由用户在确认不再需要恢复后自行管理。
-
-源码验证：`/usr/bin/ruby ProxySentryTests/watchdog_test.rb`；应用测试使用 Xcode。测试只使用临时配置，不启用或修复本机 Clash。
+这不一定是节点本身停机。全局模式下，若面板同时显示 `proxy PASS` 与 `traffic TIMEOUT`，代表 Clash 的节点延迟探测成功，但两个真实外站请求都无法经 Clash 出口完成；可能是机场入口解析命中了失效地址。诊断只报告“疑似”，不把超时等同于已证实被墙；不修改配置。
 
 ## 隐私与权限
 
-诊断主进程保持只读：
+网络诊断保持只读：
 
 - 不切换节点，不修改 Clash 配置，不接管系统代理。
 - 只读访问 Clash Verge Rev 的本地 Unix socket，并只读取白名单接口的聚合结果。
 - 不上传或持久化原始连接、节点名称、订阅地址、访问密钥或原始响应。
 - 仅在运行期间周期性探测 Apple 中国站、百度、Google、Cloudflare，以及 `1.1.1.1:443` 和 `223.5.5.5:443`。Domain Name System（DNS，域名系统；把域名解析为网络地址）或目标站点策略可能影响检测结果。
-
-用户主动启用的独立自愈进程是上述“不修改配置、不保存凭据”边界的明确例外：它只为当前节点修复读取配置、生成私有临时配置及恢复备份，不把凭据放入状态文件、命令行或继承的环境。原始入口域名会发给上述四家解析服务，其中公共解析器请求未加密；修复验证产生到候选入口和两个外站的网络请求。
 
 ProxySentry 不是 Clash Verge Rev 官方产品，与 Clash Verge Rev、Mihomo、Apple、百度、Google、Cloudflare 或阿里云均无官方关联或背书。
 
@@ -131,7 +107,7 @@ xcodebuild -project ProxySentry.xcodeproj -scheme ProxySentry -configuration Deb
 | 项目 | 状态 |
 | --- | --- |
 | 2.2 源码与通用构建 | 通过发布工作流测试与打包 |
-| GitHub Release 下载入口 | `preview-v2.2.1` 未签名预览版 |
+| GitHub Release 下载入口 | `preview-v2.2.2` 未签名预览版 |
 | Developer ID 签名 | 未完成；本机没有可用签名身份 |
 | Apple 公证与票据装订 | 未完成 |
 | Gatekeeper 验证 | 当前公开包会被拒绝 |

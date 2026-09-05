@@ -6,6 +6,29 @@ import XCTest
 
 @MainActor
 final class VisualSnapshotTests: XCTestCase {
+    func testRuleModeUsesRealProxyEvidenceWithoutGlobalNode() throws {
+        let model = sampleModel()
+        model.isExpanded = true
+        model.state = .greenClashExit
+        model.clashMode = "rule"
+        model.clashSummary = "1.19.8"
+        model.evidence = [
+            ProbeEvidence(category: .proxy, outcome: .success, milliseconds: 440, userVisibleDescription: "代理出口可用"),
+            ProbeEvidence(category: .proxy, outcome: .success, milliseconds: 638, userVisibleDescription: "代理出口可用"),
+            ProbeEvidence(category: .publicIP, outcome: .success, milliseconds: 10, userVisibleDescription: "公网地址可用"),
+            ProbeEvidence(category: .clashVersion, outcome: .success, milliseconds: 0, userVisibleDescription: "Clash 内核运行正常"),
+            ProbeEvidence(category: .clashConfigs, outcome: .success, milliseconds: 0, userVisibleDescription: "Clash 配置读取正常"),
+        ]
+        let path = "/tmp/ProxySentry-rule-mode.png"
+        try writePNG(popover(model, scheme: .dark), size: NSSize(width: 360, height: 460),
+                     to: path, minimumBytes: 4_000)
+        let text = try recognizedText(in: path)
+        XCTAssertTrue(text.contains("规则模式"), text)
+        XCTAssertTrue(text.contains("638 ms"), text)
+        XCTAssertFalse(text.contains("WAIT"), text)
+        XCTAssertFalse(text.contains("入口自愈"), text)
+    }
+
     func testExpandedPanelClearlyShowsAllClashModesAndUnknown() throws {
         let model = sampleModel()
         model.isExpanded = true
@@ -21,17 +44,6 @@ final class VisualSnapshotTests: XCTestCase {
                 XCTAssertTrue(text.contains(label) || (raw == nil && text.contains("模式末知")), text)
             }
         }
-    }
-
-    func testRenderWatchdogSettingsOffByDefault() throws {
-        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let watchdog = WatchdogController(home: home)
-        XCTAssertFalse(watchdog.enabled)
-        try writePNG(WatchdogSettingsView(watchdog: watchdog), size: NSSize(width: 480, height: 430),
-                     to: "/tmp/ProxySentry-watchdog-settings.png", minimumBytes: 4_000)
-        let text = try recognizedText(in: "/tmp/ProxySentry-watchdog-settings.png")
-        XCTAssertTrue(text.contains("未启用"), text)
-        XCTAssertTrue(text.contains("检查运行条件"), text)
     }
 
     func testRenderLightAndDarkPopovers() throws {

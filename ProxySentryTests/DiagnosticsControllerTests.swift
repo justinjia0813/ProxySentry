@@ -827,6 +827,55 @@ extension DiagnosticsControllerTests {
         XCTAssertNotEqual(round.state.kind, .red)
     }
 
+    func testRuleModeWithWorkingClashExitDoesNotRequireGlobalNodeDelay() async {
+        for route in [ProxySnapshot(pacConfigured: true), ProxySnapshot(autoDiscovery: true)] {
+            for trafficObserved: Bool? in [true, nil] {
+                var clash = testClash(true)
+                clash.activeProxyProbe = nil // Rule mode has no single global node.
+                clash.mixedPortProbe = probeOut(.success)
+                clash.mixedPortProxyProbes = [probeOut(.success), probeOut(.success)]
+                clash.trafficObserved = trafficObserved
+                let capturedClash = clash
+                let round = await DiagnosticsController.makeRound(
+                    pathSnapshot: { self.pathUp() },
+                    proxySnapshot: { route },
+                    dnsResolves: { _ in true },
+                    runDirect: { [self.probeOut(.failure), self.probeOut(.failure)] },
+                    runLocal: { _ in self.probeOut(.unavailable) },
+                    runProxy: { _ in [] },
+                    readClash: { _ in capturedClash },
+                    publicIPProbes: { [self.probeOut(.success), self.probeOut(.success)] }
+                )
+                XCTAssertEqual(round.state.kind, .green)
+                XCTAssertTrue(round.state.title.contains("Clash"))
+                XCTAssertFalse(round.evidence.contains { $0.category == .node })
+                XCTAssertEqual(round.evidence.filter { $0.category == .proxy && $0.outcome == .success }.count, 2)
+            }
+        }
+    }
+
+    func testDirectOrUnknownClashModeDoesNotTurnMixedPortSuccessGreen() async {
+        for mode: String? in ["direct", nil] {
+            let clash = DiagnosticsController.ClashRead(
+                versionOk: true, configsOk: true, infoAvailable: true,
+                localPortMatchesConfiguredProxy: false,
+                summary: DiagnosticsController.ClashSummary(mode: mode),
+                mixedPortProbe: probeOut(.success),
+                mixedPortProxyProbes: [probeOut(.success), probeOut(.success)]
+            )
+            let round = await DiagnosticsController.makeRound(
+                pathSnapshot: { self.pathUp() },
+                proxySnapshot: { ProxySnapshot(pacConfigured: true) },
+                dnsResolves: { _ in true },
+                runDirect: { [self.probeOut(.failure)] },
+                runLocal: { _ in self.probeOut(.unavailable) },
+                runProxy: { _ in [] },
+                readClash: { _ in clash }
+            )
+            XCTAssertNotEqual(round.state.kind, .green)
+        }
+    }
+
     func testPacRouteUsesMixedPortEvidenceToDetectFalseGreenEntryDial() async {
         var clash = testClash(true)
         clash.activeProxyProbe = probeOut(.success)

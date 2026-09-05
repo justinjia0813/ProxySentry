@@ -289,6 +289,7 @@ final class DiagnosticsController {
         snap.clashConfigsOutcome = clash.configsOk ? .success : .failure
         snap.clashPortsMatchConfiguredProxy = usesClashMixedPort || clash.localPortMatchesConfiguredProxy
         snap.clashInfoAvailable = clash.infoAvailable
+        snap.clashMode = clash.summary.mode
         snap.pacConfigured = proxy.pacConfigured
         snap.proxyAutoDiscovery = proxy.autoDiscovery
         snap.directIndependentlyDecidable = !clash.tunEnabled

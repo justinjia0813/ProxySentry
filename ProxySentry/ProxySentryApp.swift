@@ -61,8 +61,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timerTask: Task<Void, Never>?
     private var sustainedFaultRevealPolicy = SustainedFaultRevealPolicy()
     private var lastAgentStatusDate: Date?
-    private let watchdog = WatchdogController()
-    private var watchdogWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard NSClassFromString("XCTestCase") == nil else { return }
@@ -118,13 +116,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         configurePanel()
         configureLoginItem()
-        watchdog.onChange = { [weak self] in
-            guard let self else { return }
-            self.model.watchdogSummary = self.watchdog.enabled ? self.watchdog.status : "未启用"
-        }
-        model.watchdogSummary = watchdog.enabled ? watchdog.status : "未启用"
-        watchdog.recoverPendingTransaction()
-
         controller.start()
         pathObserver.start()
         proxyObserver.start()
@@ -147,13 +138,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController?.stop()
     }
 
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard watchdog.busy else { return .terminateNow }
-        controller?.stop()
-        watchdog.stop { sender.reply(toApplicationShouldTerminate: true) }
-        return .terminateLater
-    }
-
     func applicationDidResignActive(_ notification: Notification) {
         panelController?.collapse()
     }
@@ -167,8 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onLoginChanged: { [weak self] in self?.setLoginAtLaunch($0) },
             onOpenLoginSettings: { SMAppService.openSystemSettingsLoginItems() },
             onPresentationChanged: { [weak self] in self?.panelController?.setExpanded($0) },
-            onQuit: { NSApplication.shared.terminate(nil) },
-            onOpenWatchdog: { [weak self] in self?.openWatchdogSettings() }
+            onQuit: { NSApplication.shared.terminate(nil) }
         ))
         let panelController = NotchPanelController(model: model, contentViewController: content)
         self.panelController = panelController
@@ -177,7 +160,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshFromController() {
         guard let controller else { return }
-        watchdog.refreshStatus()
         let committedState = controller.committedState
         model.state = committedState ?? .gray
         model.isChecking = controller.isChecking
@@ -197,7 +179,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     checkedAt: checkedAt
                 )
                 lastAgentStatusDate = checkedAt
-                watchdog.consume(kind: committedState.kind, checkedAt: checkedAt)
             } catch {
                 model.notice = "Agent 状态写入失败"
             }
@@ -232,19 +213,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         model.notice = "诊断摘要已复制"
-    }
-
-    private func openWatchdogSettings() {
-        if watchdogWindow == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: WatchdogSettingsView(watchdog: watchdog)))
-            window.title = "ProxySentry · 入口自愈"
-            window.styleMask = [.titled, .closable]
-            window.isReleasedWhenClosed = false
-            window.center()
-            watchdogWindow = window
-        }
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        watchdogWindow?.makeKeyAndOrderFront(nil)
     }
 
     private func openClash() {
