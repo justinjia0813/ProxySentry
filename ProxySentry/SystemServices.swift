@@ -125,6 +125,7 @@ enum SystemServices {
         case .proxy: return "代理"
         case .node: return "代理节点"
         case .alternateNode: return "同机场备选节点"
+        case .escapeNode: return "逃生参考节点"
         case .localPort: return "本地代理端口"
         case .clashVersion: return "Clash 内核"
         case .clashConfigs: return "Clash 配置"
@@ -179,8 +180,9 @@ enum SystemServices {
     ) throws -> Data {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let nodeDelay = evidence.first(where: { $0.category == .node })
-            .map { outcomeCode($0.outcome) } ?? "unknown"
+        let nodeDelayEvidence = evidence.first(where: { $0.category == .node })
+            ?? evidence.first(where: { $0.category == .escapeNode })
+        let nodeDelay = nodeDelayEvidence.map { outcomeCode($0.outcome) } ?? "unknown"
         let realTrafficEvidence = evidence.filter { $0.category == .proxy }
         let realTraffic: String
         if realTrafficEvidence.contains(where: { $0.outcome == .success }) {
@@ -191,9 +193,26 @@ enum SystemServices {
         } else {
             realTraffic = "unknown"
         }
-        let entryAssessment = state == .redEntryDial
-            ? "suspected_dial_failure"
-            : (nodeDelay == "success" && realTraffic == "reachable" ? "no_conflict" : "not_assessed")
+        let entryAssessment: String
+        if state == .redEntryDial {
+            entryAssessment = "suspected_dial_failure"
+        } else if state == .blueEscapeNodesHealthy {
+            entryAssessment = "escape_reference_ok"
+        } else if state == .yellowEscapeNodesDown {
+            entryAssessment = "escape_reference_all_down"
+        } else if nodeDelay == "success" && realTraffic == "reachable" {
+            entryAssessment = "no_conflict"
+        } else {
+            entryAssessment = "not_assessed"
+        }
+        let recommendedAction: String
+        if state == .redEntryDial {
+            recommendedAction = "run_external_entry_diagnostics_or_contact_provider"
+        } else if state == .yellowEscapeNodesDown {
+            recommendedAction = "switch_back_will_disconnect"
+        } else {
+            recommendedAction = "none"
+        }
         let object: [String: Any] = [
             "schemaVersion": 1,
             "checkedAt": formatter.string(from: checkedAt),
@@ -209,9 +228,7 @@ enum SystemServices {
                     "assessment": entryAssessment,
                     "nodeDelay": nodeDelay,
                     "realTraffic": realTraffic,
-                    "recommendedAction": state == .redEntryDial
-                        ? "run_external_entry_diagnostics_or_contact_provider"
-                        : "none",
+                    "recommendedAction": recommendedAction,
                     "readOnly": true,
                 ],
             ],

@@ -48,6 +48,9 @@ final class DiagnosticsController {
         var trafficObserved: Bool? = nil
         /// Read-only outcome per same-provider alternate node probe.
         var alternateNodeProbes: [NetworkProbes.ProbeOutput] = []
+        /// Read-only probe of the escape reference airport's leaves. Present only
+        /// while the confirmed route is DIRECT (escape); empty otherwise.
+        var escapeNodeProbes: [NetworkProbes.ProbeOutput] = []
     }
 
     /// The complete sanitized result of one round: the classified state,
@@ -273,6 +276,12 @@ final class DiagnosticsController {
                 milliseconds: p.milliseconds,
                 userVisibleDescription: Self.description(for: p, path: "备选节点")))
         }
+        for p in clash.escapeNodeProbes {
+            evidence.append(ProbeEvidence(
+                category: .escapeNode, outcome: Self.outcome(from: p),
+                milliseconds: p.milliseconds,
+                userVisibleDescription: Self.description(for: p, path: "逃生参考节点")))
+        }
 
         // 4. Finite snapshot for the pure classifier.
         var snap = NetworkSnapshot()
@@ -300,6 +309,11 @@ final class DiagnosticsController {
         snap.dnsOutcome = path.supportsDNS ? (dns ? .success : .failure) : nil
         snap.clashTrafficObserved = clash.trafficObserved
         snap.alternateNodeOutcomes = clash.alternateNodeProbes.map { Self.outcome(from: $0) }
+        snap.clashRouteDirect = clash.infoAvailable
+            && (clash.summary.mode == "direct"
+                || (clash.summary.mode == "global"
+                    && clash.summary.selectedGroup?.uppercased() == "DIRECT"))
+        snap.referenceNodeOutcomes = clash.escapeNodeProbes.map { Self.outcome(from: $0) }
 
         let state = DiagnosisClassifier.classify(snap)
         return DiagnosisRound(

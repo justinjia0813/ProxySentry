@@ -16,6 +16,7 @@ struct ProbeEvidence: Equatable, Sendable {
         case proxy
         case node
         case alternateNode
+        case escapeNode
         case localPort
         case clashVersion
         case clashConfigs
@@ -78,6 +79,13 @@ struct NetworkSnapshot: Equatable, Sendable {
     var clashTrafficObserved: Bool? = nil
     /// One outcome per same-provider alternate node probe (read-only latency).
     var alternateNodeOutcomes: [ProbeOutcome] = []
+    /// Confirmed DIRECT-escape route: Clash mode is "direct", or mode is "global"
+    /// and the GLOBAL leaf is DIRECT. False by default; never gates green unless
+    /// explicitly confirmed, so unknown modes behave exactly as today.
+    var clashRouteDirect = false
+    /// One outcome per delay probe against the escape reference airport's leaves.
+    /// Empty when not escaping or when no reference airport could be sampled.
+    var referenceNodeOutcomes: [ProbeOutcome] = []
 }
 
 /// Five diagnosis states with symbol/color/title mappings.
@@ -102,7 +110,23 @@ struct DiagnosisState: Equatable, Sendable {
     /// traffic while the node and kernel are healthy.
     static let greenTrafficActive = DiagnosisState(kind: .green, symbolName: "checkmark.shield.fill", title: "Clash 正在承载代理流量", missingEvidenceExplanation: "")
     static let blue = DiagnosisState(kind: .blue, symbolName: "shield.fill", title: "系统未使用代理，直连网络正常", missingEvidenceExplanation: "")
-    static let blueNodeHealthy = DiagnosisState(kind: .blue, symbolName: "shield.fill", title: "代理节点正常，系统路由未确认", missingEvidenceExplanation: "系统代理路由未确认。")
+    static let blueNodeHealthy = DiagnosisState(kind: .blue, symbolName: "shield.fill", title: "代理节点正常，系统路由未确认", missingEvidenceExplanation: "代理节点可用，但系统代理路由尚未确认。")
+
+    // Escape (DIRECT-route) conclusions. The route is a deliberate direct
+    // escape, so green would be a lie about the airport; a read-only sample of a
+    // reference airport's real nodes decides the honest reminder instead.
+    static let blueEscapeNodesHealthy = DiagnosisState(
+        kind: .blue, symbolName: "shield.fill",
+        title: "逃生直连中：机场节点可用",
+        missingEvidenceExplanation: "当前为直连逃生；参考机场节点实测可用，切回代理应可恢复。系统代理当前未走机场节点。")
+    static let yellowEscapeNodesDown = DiagnosisState(
+        kind: .yellow, symbolName: "exclamationmark.shield.fill",
+        title: "逃生直连中：机场节点疑似全灭",
+        missingEvidenceExplanation: "当前为直连逃生；参考机场节点全部探测失败，切回代理可能会断网。ProxySentry 未修改任何配置。")
+    static let grayEscapeNodesUnverifiable = DiagnosisState(
+        kind: .gray, symbolName: "questionmark.shield",
+        title: "逃生直连中：无法定位机场节点",
+        missingEvidenceExplanation: "未能从 Clash 识别可采样的机场节点。")
     static let yellow = DiagnosisState(kind: .yellow, symbolName: "exclamationmark.shield.fill", title: "本机代理配置异常", missingEvidenceExplanation: "")
     static let red = DiagnosisState(kind: .red, symbolName: "xmark.shield.fill", title: "疑似机场或节点故障", missingEvidenceExplanation: "")
     static let gray = DiagnosisState(kind: .gray, symbolName: "questionmark.shield", title: "网络不可用或暂时无法定位", missingEvidenceExplanation: "")
@@ -123,9 +147,10 @@ struct DiagnosisState: Equatable, Sendable {
         switch kind {
         case .green: return missingEvidenceExplanation.isEmpty ? "代理出口工作正常。" : missingEvidenceExplanation
         case .blue:
+            // Sub-states carry their own complete explanation when present.
             return missingEvidenceExplanation.isEmpty
                 ? "未使用代理，直连工作正常。"
-                : "代理节点可用，但系统代理路由尚未确认。"
+                : missingEvidenceExplanation
         case .yellow:
             return missingEvidenceExplanation.isEmpty
                 ? "本地代理端口不可达或与 Clash 不匹配。"
@@ -157,7 +182,11 @@ enum DiagnosisClassifier {
             || s.proxyExitVerifiedThroughClashRoute
 
         // 1. Green first: a verified, working proxy exit is the strongest signal.
+        //    A confirmed DIRECT-escape route is not a proxy exit (success here
+        //    only proves direct egress), so it must never claim green — the
+        //    dedicated escape branch below decides instead.
         if hasProxyRoute,
+           s.clashRouteDirect == false,
            s.proxyExitVerifiedThroughSystemRoute,
            s.proxyOutcomes.contains(.success) {
             return .green
@@ -166,6 +195,7 @@ enum DiagnosisClassifier {
         // A real request through Clash also verifies its exit in rule mode.
         // Keep the unresolved macOS automatic route explicit in the result.
         if hasProxyRoute,
+           s.clashRouteDirect == false,
            s.proxyExitVerifiedThroughClashRoute,
            s.clashMode == "rule" || s.clashMode == "global",
            s.proxyOutcomes.contains(.success) {
@@ -201,6 +231,25 @@ enum DiagnosisClassifier {
         if !directOK,
            (s.gatewayOutcome == .failure || s.gatewayOutcome == .timeout), publicAllDown {
             return .grayLocalNetwork // gateway and public both down
+        }
+
+        // 2b. Escape/DIRECT route. Green was suppressed above; base-network
+        //     evidence above still owns "direct is down". A read-only sample of
+        //     a reference airport's real nodes decides the honest reminder.
+        if s.clashRouteDirect, hasProxyRoute {
+            guard s.directOutcomes.contains(.success) else {
+                // Escape but the DIRECT route itself is failing with no clean
+                // base attribution. Honest unknown — never green while escaping.
+                return grayState("逃生直连中但直连出口失败，基础网络证据不足。")
+            }
+            if s.referenceNodeOutcomes.contains(.success) {
+                return .blueEscapeNodesHealthy
+            }
+            if !s.referenceNodeOutcomes.isEmpty,
+               s.referenceNodeOutcomes.allSatisfy({ $0 == .failure || $0 == .timeout }) {
+                return .yellowEscapeNodesDown
+            }
+            return .grayEscapeNodesUnverifiable
         }
 
         // 3. Node anomaly conclusions. Only attribute when the current node probe

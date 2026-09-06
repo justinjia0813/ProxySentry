@@ -229,4 +229,37 @@ final class SystemServicesTests: XCTestCase {
         XCTAssertNil(entry["host"])
         XCTAssertNil(entry["ip"])
     }
+
+    func testCopySummaryIncludesEscapeNodeLabel() {
+        let state = DiagnosisState.yellowEscapeNodesDown
+        let evidence = [
+            ProbeEvidence(category: .escapeNode, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "逃生参考节点探测超时"),
+        ]
+        let summary = SystemServices.copySummary(state: state, evidence: evidence)
+        XCTAssertTrue(summary.contains(state.title))
+        XCTAssertTrue(summary.contains("原因：\(state.missingEvidenceExplanation)"))
+        XCTAssertTrue(summary.contains("逃生参考节点：超时（3000ms）逃生参考节点探测超时"))
+    }
+
+    func testAgentStatusEscapeAllDownAssessment() throws {
+        let evidence = [
+            ProbeEvidence(category: .escapeNode, outcome: .failure, milliseconds: 3000, userVisibleDescription: "逃生参考节点不可用"),
+            ProbeEvidence(category: .escapeNode, outcome: .timeout, milliseconds: 3000, userVisibleDescription: "逃生参考节点超时"),
+        ]
+        let data = try SystemServices.agentStatusJSON(
+            state: .yellowEscapeNodesDown,
+            evidence: evidence,
+            checkedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let diagnosis = try XCTUnwrap(root["diagnosis"] as? [String: Any])
+        let proxy = try XCTUnwrap(root["proxy"] as? [String: Any])
+        let entry = try XCTUnwrap(proxy["entry"] as? [String: Any])
+        XCTAssertEqual(diagnosis["state"] as? String, "yellow")
+        XCTAssertEqual(entry["assessment"] as? String, "escape_reference_all_down")
+        XCTAssertEqual(entry["nodeDelay"] as? String, "failure")
+        XCTAssertEqual(entry["realTraffic"] as? String, "unknown")
+        XCTAssertEqual(entry["recommendedAction"] as? String, "switch_back_will_disconnect")
+        XCTAssertEqual(entry["readOnly"] as? Bool, true)
+    }
 }

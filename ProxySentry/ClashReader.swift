@@ -499,6 +499,80 @@ enum ClashReader {
         return nil
     }
 
+    /// Read-only, deterministic choice of a "reference airport" whose ordinary
+    /// leaves can be delay-sampled while the route is DIRECT (escape), where no
+    /// current leaf exists to sample. Preference order:
+    ///   1. A member of the GLOBAL selector that resolves to an ordinary
+    ///      provider-backed leaf (sorted by name for determinism);
+    ///   2. otherwise the first provider-backed ordinary leaf in sorted order.
+    /// Returns up to `maxLeaves` ordinary leaves of that same provider. nil when
+    /// no provider-backed ordinary leaf exists (manual nodes / unrecognizable
+    /// config) — the caller reports `unavailable`, never a hard fault. Names are
+    /// used only internally to drive read-only delay probes; they are never part
+    /// of a public result.
+    static func referenceLeafCandidates(
+        fromProxies data: Data,
+        maxLeaves: Int = 2
+    ) -> Result<[String]?, ReadError> {
+        guard data.count <= maxBodyBytes else { return .failure(.exceededBodyLimit) }
+        guard let obj = jsonObject(data), let dict = obj as? [String: Any],
+              let proxies = dict["proxies"] as? [String: Any] else {
+            return .failure(.malformedJSON(field: "<root>"))
+        }
+
+        /// Resolve a group entry's `now` chain to the underlying leaf.
+        func resolvedLeaf(of entry: [String: Any]) -> String? {
+            guard let start = entry["now"] as? String, !start.isEmpty else { return nil }
+            var current = start
+            var visited: Set<String> = []
+            while let entry = proxies[current] as? [String: Any],
+                  let nested = entry["now"] as? String,
+                  !nested.isEmpty {
+                guard visited.insert(current).inserted else { return nil }
+                current = nested
+            }
+            return current
+        }
+
+        /// Provider backing an ordinary leaf (non-policy, non-special), else nil.
+        func providerBackedLeaf(_ name: String) -> String? {
+            guard let entry = proxies[name] as? [String: Any],
+                  let type = (entry["type"] as? String)?.lowercased(),
+                  !nonLeafProxyTypes.contains(type) else { return nil }
+            return currentProvider(from: entry)
+        }
+
+        func referenceProvider() -> String? {
+            if let global = proxies["GLOBAL"] as? [String: Any],
+               let members = global["all"] as? [String] {
+                for name in members.sorted() {
+                    guard let member = proxies[name] as? [String: Any] else { continue }
+                    guard let leaf = resolvedLeaf(of: member),
+                          let provider = providerBackedLeaf(leaf) else { continue }
+                    return provider
+                }
+            }
+            for name in proxies.keys.sorted() {
+                if let provider = providerBackedLeaf(name) { return provider }
+            }
+            return nil
+        }
+
+        guard let provider = referenceProvider() else { return .success(nil) }
+
+        var candidates: [String] = []
+        for name in proxies.keys.sorted() {
+            guard candidates.count < maxLeaves else { break }
+            guard let entry = proxies[name] as? [String: Any],
+                  let type = (entry["type"] as? String)?.lowercased(),
+                  !nonLeafProxyTypes.contains(type) else { continue }
+            guard currentProvider(from: entry) == provider else { continue }
+            guard proxyDelayPath(proxyName: name) != nil else { continue }
+            candidates.append(name)
+        }
+        return .success(candidates.isEmpty ? nil : candidates)
+    }
+
     // MARK: - Unix socket candidates (fixed, no scanning)
 
     /// Fixed socket file name used by all three candidate paths.
@@ -876,6 +950,44 @@ enum ClashReader {
         }
         guard case .success(let candidates) = sameProviderCandidates(
             fromProxies: resp.body, currentLeaf: selection.selected),
+            let candidates = candidates else {
+            return .success(ProxyHealthSample(tested: 0, succeeded: 0, failed: 0, unavailable: true))
+        }
+        // Fan out the (at most two) delay probes concurrently so the sample never
+        // adds a serial 2×3s tail to the round. Each probe keeps its own 3s
+        // deadline; the result stays an aggregate success count.
+        let succeeded = await runCandidateDelayProbes(candidates) { name in
+            let r = await fetchProxyDelay(socketPath: socketPath, proxyName: name, secret: secret)
+            if case .success = r { return true }
+            return false
+        }
+        return .success(ProxyHealthSample(
+            tested: candidates.count,
+            succeeded: succeeded,
+            failed: candidates.count - succeeded,
+            unavailable: false
+        ))
+    }
+
+    /// Explicitly requested, read-only health sample of the escape reference
+    /// airport's leaves while the confirmed route is DIRECT (no current leaf
+    /// exists). Fetches /proxies once, resolves a reference provider
+    /// deterministically, delay-probes up to `maxLeaves` ordinary leaves and
+    /// returns only aggregate counts. `unavailable` when no provider-backed
+    /// reference leaf can be identified. Never switches selection.
+    static func sampleReferenceProviderHealth(
+        socketPath: String,
+        secret: String?,
+        maxLeaves: Int = 2
+    ) async -> Result<ProxyHealthSample, ReadError> {
+        guard isAllowedSocketPath(socketPath), validateSocketCandidate(path: socketPath) else {
+            return .failure(.transport)
+        }
+        let response = await performGET(
+            endpoint: .unix(path: socketPath), httpPath: "/proxies", secret: secret)
+        guard case .success(let resp) = response else { return .failure(.transport) }
+        guard case .success(let candidates) = referenceLeafCandidates(
+            fromProxies: resp.body, maxLeaves: maxLeaves),
             let candidates = candidates else {
             return .success(ProxyHealthSample(tested: 0, succeeded: 0, failed: 0, unavailable: true))
         }

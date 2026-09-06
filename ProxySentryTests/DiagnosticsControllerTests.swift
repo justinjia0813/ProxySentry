@@ -915,4 +915,83 @@ extension DiagnosticsControllerTests {
         XCTAssertEqual(round.state, .yellowDnsConfig)
         XCTAssertTrue(round.evidence.contains { $0.category == .dns && $0.outcome == .failure })
     }
+
+    // MARK: - Escape (DIRECT-route) round integration
+
+    private func escapeClash(reference: [NetworkProbes.ProbeResult]) -> DiagnosticsController.ClashRead {
+        var clash = DiagnosticsController.ClashRead(
+            versionOk: true, configsOk: true, infoAvailable: true,
+            localPortMatchesConfiguredProxy: true,
+            summary: DiagnosticsController.ClashSummary(
+                version: "1.18.0", mode: "global", selectedGroup: "DIRECT", delay: nil))
+        clash.escapeNodeProbes = reference.map { probeOut($0) }
+        return clash
+    }
+
+    func testRoundEscapeHealthyReferenceIsBlue() async {
+        let round = await DiagnosticsController.makeRound(
+            pathSnapshot: { self.pathUp() },
+            proxySnapshot: { ProxySnapshot(httpProxy: FixedProxy(host: "127.0.0.1", port: 7890)) },
+            dnsResolves: { _ in true },
+            runDirect: { [self.probeOut(.success)] },
+            runLocal: { _ in self.probeOut(.success) },
+            runProxy: { _ in [self.probeOut(.success)] },
+            readClash: { _ in self.escapeClash(reference: [.success, .success]) }
+        )
+        XCTAssertEqual(round.state, .blueEscapeNodesHealthy)
+        XCTAssertEqual(round.state.kind, .blue)
+        XCTAssertNotEqual(round.state.kind, .green)
+        XCTAssertEqual(
+            round.evidence.filter { $0.category == .escapeNode && $0.outcome == .success }.count,
+            2)
+    }
+
+    func testRoundEscapeAllReferenceDownIsYellow() async {
+        let round = await DiagnosticsController.makeRound(
+            pathSnapshot: { self.pathUp() },
+            proxySnapshot: { ProxySnapshot(httpProxy: FixedProxy(host: "127.0.0.1", port: 7890)) },
+            dnsResolves: { _ in true },
+            runDirect: { [self.probeOut(.success)] },
+            runLocal: { _ in self.probeOut(.success) },
+            runProxy: { _ in [self.probeOut(.success)] },
+            readClash: { _ in self.escapeClash(reference: [.failure, .timeout]) }
+        )
+        XCTAssertEqual(round.state, .yellowEscapeNodesDown)
+        XCTAssertEqual(round.state.kind, .yellow)
+        XCTAssertEqual(
+            round.evidence.filter { $0.category == .escapeNode }.count,
+            2)
+    }
+
+    func testRoundEscapeNoReferenceSampleIsGrayNotGreen() async {
+        let round = await DiagnosticsController.makeRound(
+            pathSnapshot: { self.pathUp() },
+            proxySnapshot: { ProxySnapshot(httpProxy: FixedProxy(host: "127.0.0.1", port: 7890)) },
+            dnsResolves: { _ in true },
+            runDirect: { [self.probeOut(.success)] },
+            runLocal: { _ in self.probeOut(.success) },
+            runProxy: { _ in [self.probeOut(.success)] },
+            readClash: { _ in self.escapeClash(reference: []) }
+        )
+        XCTAssertEqual(round.state, .grayEscapeNodesUnverifiable)
+        XCTAssertEqual(round.state.kind, .gray)
+        XCTAssertNotEqual(round.state.kind, .green)
+    }
+
+    func testRoundEscapeDirectDownWithBaseEvidenceIsNotEscapeHealthy() async {
+        let round = await DiagnosticsController.makeRound(
+            pathSnapshot: { self.pathUp() },
+            proxySnapshot: { ProxySnapshot(httpProxy: FixedProxy(host: "127.0.0.1", port: 7890)) },
+            dnsResolves: { _ in true },
+            runDirect: { [self.probeOut(.failure), self.probeOut(.timeout)] },
+            runLocal: { _ in self.probeOut(.success) },
+            runProxy: { _ in [self.probeOut(.failure)] },
+            readClash: { _ in self.escapeClash(reference: [.success]) },
+            gatewayProbe: { self.probeOut(.success) },
+            publicIPProbes: { [self.probeOut(.failure), self.probeOut(.timeout)] }
+        )
+        XCTAssertEqual(round.state, .grayExternal)
+        XCTAssertNotEqual(round.state.kind, .blue)
+        XCTAssertNotEqual(round.state.kind, .yellow)
+    }
 }

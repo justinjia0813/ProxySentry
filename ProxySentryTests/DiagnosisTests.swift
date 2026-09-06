@@ -426,4 +426,83 @@ final class DiagnosisTests: XCTestCase {
         XCTAssertNotEqual(state, .grayExternal)
         XCTAssertEqual(state.kind, .gray) // falls back to unknown, not attributed
     }
+
+    // MARK: - 11. Escape (DIRECT-route) conclusions
+
+    private func escapeDirect(_ reference: [ProbeOutcome] = []) -> NetworkSnapshot {
+        var s = proxiedHealthy()
+        s.clashMode = "global"
+        s.clashRouteDirect = true
+        s.clashActiveProxyOutcome = nil // no current-leaf delay while escaping
+        s.referenceNodeOutcomes = reference
+        return s
+    }
+
+    func testEscapeHealthyReferenceIsBlueNotGreen() {
+        let state = DiagnosisClassifier.classify(escapeDirect([.success, .success]))
+        XCTAssertEqual(state, .blueEscapeNodesHealthy)
+        XCTAssertEqual(state.kind, .blue)
+        XCTAssertNotEqual(state.kind, .green, "a DIRECT-escape route must never claim proxy-green")
+        XCTAssertNotEqual(state.title, "代理工作正常")
+    }
+
+    func testEscapeAllReferenceDownIsYellowNotGreen() {
+        let state = DiagnosisClassifier.classify(escapeDirect([.failure, .timeout]))
+        XCTAssertEqual(state, .yellowEscapeNodesDown)
+        XCTAssertEqual(state.kind, .yellow)
+        XCTAssertNotEqual(state.kind, .green)
+    }
+
+    func testEscapeSingleNodeProviderAllDownIsYellow() {
+        let state = DiagnosisClassifier.classify(escapeDirect([.failure]))
+        XCTAssertEqual(state, .yellowEscapeNodesDown, "one sampled leaf all dead is still a switch-back hazard")
+    }
+
+    func testEscapeUnsamplableReferenceIsGrayNotGreen() {
+        let state = DiagnosisClassifier.classify(escapeDirect([]))
+        XCTAssertEqual(state, .grayEscapeNodesUnverifiable)
+        XCTAssertEqual(state.kind, .gray)
+        XCTAssertNotEqual(state.kind, .green)
+    }
+
+    func testEscapeDirectDownWithBaseAttributionStaysBaseConclusion() {
+        var s = escapeDirect([.success])
+        s.directOutcomes = [.failure, .timeout]
+        s.gatewayOutcome = .success
+        s.publicIPOutcomes = [.failure, .timeout]
+        let state = DiagnosisClassifier.classify(s)
+        XCTAssertEqual(state, .grayExternal)
+        XCTAssertNotEqual(state.kind, .green)
+        XCTAssertNotEqual(state.kind, .blue)
+        XCTAssertNotEqual(state.kind, .yellow)
+    }
+
+    func testNonEscapeGlobalLeafStaysGreen() {
+        var s = proxiedHealthy()
+        s.clashMode = "global"
+        s.clashRouteDirect = false
+        s.clashActiveProxyOutcome = .success
+        let state = DiagnosisClassifier.classify(s)
+        XCTAssertEqual(state, .green)
+        XCTAssertEqual(state.title, "代理工作正常")
+    }
+
+    func testUnknownModeIsNotTreatedAsEscape() {
+        var s = proxiedHealthy()
+        s.clashMode = nil
+        s.clashRouteDirect = false
+        XCTAssertEqual(DiagnosisClassifier.classify(s), .green)
+    }
+
+    func testRuleModeGreenClashExitUnaffectedByEscape() {
+        var s = proxiedHealthy()
+        s.clashMode = "rule"
+        s.clashRouteDirect = false
+        s.proxyExitVerifiedThroughSystemRoute = false
+        s.proxyExitVerifiedThroughClashRoute = true
+        s.clashActiveProxyOutcome = nil
+        let state = DiagnosisClassifier.classify(s)
+        XCTAssertEqual(state, .greenClashExit)
+        XCTAssertEqual(state.kind, .green)
+    }
 }

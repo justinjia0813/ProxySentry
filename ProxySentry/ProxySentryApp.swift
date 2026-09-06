@@ -353,8 +353,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await (local, proxy)
         }()
 
+        // A confirmed DIRECT-escape route (mode "direct", or mode "global" whose
+        // GLOBAL leaf is DIRECT) has no current leaf to delay-probe, and real
+        // traffic then only proves direct egress — never a proxy green. Instead
+        // we read-only sample a reference airport's real nodes (escapeNodeProbes).
+        let routeDirect = configs?.mode == "direct"
+            || (configs?.mode == "global" && selection?.selected.uppercased() == "DIRECT")
         let delayResult: Result<Int, ClashReader.ReadError>?
-        if configs?.mode == "global", let selected = selection?.selected,
+        if !routeDirect, configs?.mode == "global", let selected = selection?.selected,
            ClashReader.proxyDelayPath(proxyName: selected) != nil {
             delayResult = await ClashReader.fetchProxyDelay(
                 socketPath: socketPath, proxyName: selected, secret: nil)
@@ -386,21 +392,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let alternateNodeProbes: [NetworkProbes.ProbeOutput]
-        let peerRead = shouldSamplePeers
-            ? await Self.peerSampleWithinRoundBudget {
-                await ClashReader.samplePeerNodeHealth(socketPath: socketPath, secret: nil)
+        let escapeNodeProbes: [NetworkProbes.ProbeOutput]
+        if routeDirect, version != nil, configs != nil {
+            let sample = await Self.peerSampleWithinRoundBudget {
+                await ClashReader.sampleReferenceProviderHealth(socketPath: socketPath, secret: nil)
             }
-            : nil
-        if case .success(let sample) = peerRead, !sample.unavailable {
-            alternateNodeProbes =
-                Array(repeating: NetworkProbes.ProbeOutput(
-                    outcome: .success, failureCategory: nil, milliseconds: 0
-                ), count: sample.succeeded)
-                + Array(repeating: NetworkProbes.ProbeOutput(
-                    outcome: .failure, failureCategory: .transport, milliseconds: 0
-                ), count: sample.failed)
-        } else {
             alternateNodeProbes = []
+            if case .success(let s) = sample, !s.unavailable {
+                escapeNodeProbes =
+                    Array(repeating: NetworkProbes.ProbeOutput(
+                        outcome: .success, failureCategory: nil, milliseconds: 0
+                    ), count: s.succeeded)
+                    + Array(repeating: NetworkProbes.ProbeOutput(
+                        outcome: .failure, failureCategory: .transport, milliseconds: 0
+                    ), count: s.failed)
+            } else {
+                escapeNodeProbes = []
+            }
+        } else {
+            escapeNodeProbes = []
+            let peerRead = shouldSamplePeers
+                ? await Self.peerSampleWithinRoundBudget {
+                    await ClashReader.samplePeerNodeHealth(socketPath: socketPath, secret: nil)
+                }
+                : nil
+            if case .success(let sample) = peerRead, !sample.unavailable {
+                alternateNodeProbes =
+                    Array(repeating: NetworkProbes.ProbeOutput(
+                        outcome: .success, failureCategory: nil, milliseconds: 0
+                    ), count: sample.succeeded)
+                    + Array(repeating: NetworkProbes.ProbeOutput(
+                        outcome: .failure, failureCategory: .transport, milliseconds: 0
+                    ), count: sample.failed)
+            } else {
+                alternateNodeProbes = []
+            }
         }
         let mixedPort = await mixedPortRead
 
@@ -427,7 +453,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mixedPortProxyProbes: mixedPort.1,
             tunEnabled: configs?.tunEnabled == true,
             trafficObserved: trafficObserved,
-            alternateNodeProbes: alternateNodeProbes
+            alternateNodeProbes: alternateNodeProbes,
+            escapeNodeProbes: escapeNodeProbes
         )
     }
 

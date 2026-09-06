@@ -346,6 +346,7 @@ struct StatusPopoverView: View {
 
     private var routeRows: [RouteRow] {
         let hasRealTrafficEvidence = model.evidence.contains { $0.category == .proxy }
+        let hasEscapeEvidence = model.evidence.contains { $0.category == .escapeNode }
         return [
             routeRow(
                 id: "base",
@@ -361,7 +362,13 @@ struct StatusPopoverView: View {
             ),
             baseNetworkFailed
                 ? blockedRouteRow(id: "proxy", name: "proxy")
-                : routeRow(id: "proxy", name: "proxy", categories: model.clashMode == "rule" ? [.proxy] : [.node]),
+                : routeRow(
+                    id: "proxy",
+                    name: "proxy",
+                    categories: hasEscapeEvidence
+                        ? [.escapeNode, .node]
+                        : (model.clashMode == "rule" ? [.proxy] : [.node])
+                ),
             routeRow(
                 id: "clash",
                 name: "clash",

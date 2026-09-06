@@ -1033,6 +1033,97 @@ extension ClashReaderTests {
         XCTAssertEqual(candidates?.count, 2, "must sample at most two same-provider peers")
     }
 
+    // MARK: - Escape reference-airport candidates (DIRECT route)
+
+    private func escapeProxiesData(_ proxies: [String: Any]) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["proxies": proxies])
+    }
+
+    func testReferenceResolvesProviderFromGlobalMemberWhenNowIsDirect() {
+        // GLOBAL is DIRECT (escape), but its members still resolve to a real
+        // provider-backed leaf; that provider is the reference airport.
+        let data = escapeProxiesData([
+            "GLOBAL": ["type": "Selector", "now": "DIRECT", "all": ["candyGroup", "bubbleGroup"]],
+            "DIRECT": ["type": "Direct"],
+            "candyGroup": ["type": "Selector", "now": "hk-01"],
+            "hk-01": leaf(providerName: "candy"),
+            "hk-02": leaf(providerName: "candy"),
+            "bubbleGroup": ["type": "Selector", "now": "jp-01"],
+            "jp-01": leaf(providerName: "bubble"),
+            "jp-02": leaf(providerName: "bubble"),
+        ])
+        guard case .success(let candidates) = ClashReader.referenceLeafCandidates(fromProxies: data) else {
+            return XCTFail("Expected success")
+        }
+        // GLOBAL members are scanned in sorted order: bubbleGroup precedes candyGroup.
+        XCTAssertEqual(candidates, ["jp-01", "jp-02"])
+    }
+
+    func testReferenceSkipsPolicySpecialMembersUntilProviderLeaf() {
+        // Members that are DIRECT/REJECT/group-without-provider are skipped; the
+        // first member that resolves to a provider-backed leaf wins.
+        let data = escapeProxiesData([
+            "GLOBAL": ["type": "Selector", "now": "DIRECT", "all": ["DIRECT", "REJECT", "candyGroup"]],
+            "DIRECT": ["type": "Direct"],
+            "REJECT": ["type": "Reject"],
+            "candyGroup": ["type": "Selector", "now": "hk-01"],
+            "hk-01": leaf(providerName: "candy"),
+            "hk-02": leaf(providerName: "candy"),
+            "bubbleGroup": ["type": "Selector", "now": "jp-01"],
+            "jp-01": leaf(providerName: "bubble"),
+        ])
+        guard case .success(let candidates) = ClashReader.referenceLeafCandidates(fromProxies: data) else {
+            return XCTFail("Expected success")
+        }
+        XCTAssertEqual(candidates, ["hk-01", "hk-02"])
+    }
+
+    func testReferenceFallsBackToSortedProviderWhenGlobalHasNoUsableMember() {
+        let data = escapeProxiesData([
+            "GLOBAL": ["type": "Selector", "now": "DIRECT", "all": []],
+            "DIRECT": ["type": "Direct"],
+            "hk-01": leaf(providerName: "candy"),
+            "hk-02": leaf(providerName: "candy"),
+            "jp-01": leaf(providerName: "bubble"),
+        ])
+        guard case .success(let candidates) = ClashReader.referenceLeafCandidates(fromProxies: data) else {
+            return XCTFail("Expected success")
+        }
+        XCTAssertEqual(candidates, ["hk-01", "hk-02"], "first sorted provider-backed leaf determines reference")
+    }
+
+    func testReferenceExcludesGroupsSpecialAndDirectNamesAndCaps() {
+        // Groups with a provider name, special types, and a DIRECT-named leaf with
+        // a provider are all excluded; at most maxLeaves ordinary leaves remain.
+        let data = escapeProxiesData([
+            "GLOBAL": ["type": "Selector", "now": "DIRECT", "all": ["candyGroup"]],
+            "candyGroup": ["type": "Selector", "now": "hk-01", "provider-name": "candy"],
+            "hk-01": leaf(providerName: "candy"),
+            "hk-02": leaf(providerName: "candy"),
+            "hk-03": leaf(providerName: "candy"),
+            "hk-04": leaf(providerName: "candy"),
+            "DIRECT": leaf(providerName: "candy"),
+            "rejectX": leaf(type: "Reject", providerName: "candy"),
+        ])
+        guard case .success(let candidates) = ClashReader.referenceLeafCandidates(fromProxies: data) else {
+            return XCTFail("Expected success")
+        }
+        XCTAssertEqual(candidates, ["hk-01", "hk-02"], "only ordinary candy leaves count, capped at two")
+    }
+
+    func testReferenceNilWhenNoProviderBackedLeaf() {
+        // Manual nodes and groups only: no provider, so no reference exists.
+        let data = escapeProxiesData([
+            "GLOBAL": ["type": "Selector", "now": "DIRECT", "all": ["manualGroup"]],
+            "manualGroup": ["type": "Selector", "now": "manual-node"],
+            "manual-node": leaf(type: "Vless"),
+        ])
+        guard case .success(let candidates) = ClashReader.referenceLeafCandidates(fromProxies: data) else {
+            return XCTFail("Expected success")
+        }
+        XCTAssertNil(candidates, "no provider-backed leaf must mean no reference airport")
+    }
+
     func testSameProviderUsesProviderNameKey() {
         // Real Mihomo exposes provider-name (official key); provider is legacy.
         let data = proxiesJSON(
